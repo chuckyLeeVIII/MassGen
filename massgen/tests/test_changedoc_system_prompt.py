@@ -16,6 +16,7 @@ from massgen.system_prompt_sections import (
     ChangedocSection,
     EvaluationSection,
     _build_changedoc_checklist_analysis,
+    _build_changedoc_subsequent_round_prompt,
     _build_checklist_analysis,
 )
 
@@ -315,3 +316,237 @@ class TestChangedocChecklist:
         # The coordination section should use generic analysis
         assert "Ideal Version" in msg
         assert "Decision Audit" not in msg
+
+
+# ---------------------------------------------------------------------------
+# Changedoc prompt answer label tests
+# ---------------------------------------------------------------------------
+
+
+class TestChangedocAnswerLabels:
+    """Tests that changedoc prompt references answer labels from CURRENT ANSWERS."""
+
+    def test_changedoc_prompt_mentions_answer_labels_in_headers(self):
+        """Changedoc guidance tells agents labels are visible in CURRENT ANSWERS headers."""
+        section = ChangedocSection(has_prior_answers=True)
+        content = section.build_content()
+        # Should mention that labels appear in <CURRENT ANSWERS> headers
+        assert "CURRENT ANSWERS" in content
+        assert "agent1." in content  # versioned label example like agent1.2
+
+
+class TestSelfPlaceholderInPrompts:
+    """Tests that changedoc prompts use [SELF] for self-references."""
+
+    def test_first_round_template_uses_self_placeholder(self):
+        """First-round changedoc prompt uses [SELF] for the agent's own origin."""
+        section = ChangedocSection(has_prior_answers=False)
+        content = section.build_content()
+        assert "[SELF]" in content
+        # Should NOT use [your answer label] anymore
+        assert "[your answer label]" not in content
+
+    def test_subsequent_round_template_uses_self_placeholder(self):
+        """Subsequent-round changedoc prompt uses [SELF] in template examples."""
+        section = ChangedocSection(has_prior_answers=True)
+        content = section.build_content()
+        assert "[SELF]" in content
+        # Should NOT use [your label] anymore
+        assert "[your label]" not in content
+
+    def test_subsequent_round_explains_self_placeholder(self):
+        """Subsequent-round prompt explains that [SELF] is replaced by the system."""
+        section = ChangedocSection(has_prior_answers=True)
+        content = section.build_content()
+        # Should explain the replacement mechanism
+        assert "replace" in content.lower() or "substitut" in content.lower()
+
+
+# ---------------------------------------------------------------------------
+# Changedoc analysis improvement tests (Area 1)
+# ---------------------------------------------------------------------------
+
+
+class TestChangedocAnalysisImprovements:
+    """Tests for changedoc analysis prompt improvements."""
+
+    def test_analysis_contains_substantiveness_test(self):
+        """Changedoc analysis includes substantiveness classification step."""
+        analysis = _build_changedoc_checklist_analysis()
+        assert "TRANSFORMATIVE" in analysis
+        assert "STRUCTURAL" in analysis
+        assert "INCREMENTAL" in analysis
+
+    def test_analysis_contains_convergence_awareness(self):
+        """Ideal Decision Set step includes convergence awareness guidance."""
+        analysis = _build_changedoc_checklist_analysis()
+        assert "overlap" in analysis.lower() or "already exist" in analysis.lower()
+
+    def test_analysis_contains_subtractive_improvement(self):
+        """Fresh Approach section mentions subtractive improvement possibility."""
+        analysis = _build_changedoc_checklist_analysis()
+        assert "fewer" in analysis.lower() or "restraint" in analysis.lower()
+
+    def test_subsequent_prompt_contains_dec_inflation_guidance(self):
+        """Subsequent round changedoc prompt warns against DEC inflation."""
+        from massgen.system_prompt_sections import (
+            _build_changedoc_subsequent_round_prompt,
+        )
+
+        prompt = _build_changedoc_subsequent_round_prompt()
+        # Should mention quality over quantity for decisions
+        assert "remove" in prompt.lower() or "merge" in prompt.lower()
+        assert "deeply" in prompt.lower() or "depth" in prompt.lower()
+
+    def test_analysis_with_prior_answers_has_round_aware_t5(self):
+        """When has_prior_answers=True, analysis includes round-aware T5 guidance."""
+        analysis = _build_changedoc_checklist_analysis(has_prior_answers=True)
+        assert "substantive improvement" in analysis.lower() or "user would notice" in analysis.lower()
+
+    def test_analysis_without_prior_answers_omits_round_aware_t5(self):
+        """When has_prior_answers=False, analysis omits round-aware T5 guidance."""
+        analysis = _build_changedoc_checklist_analysis(has_prior_answers=False)
+        # Should NOT have the round-aware T5 note about cosmetic changes
+        assert "cosmetic" not in analysis.lower() or "feature adoption" not in analysis.lower()
+
+
+# ---------------------------------------------------------------------------
+# Quality Assessment in changedoc tests (Area 2d)
+# ---------------------------------------------------------------------------
+
+
+class TestQualityAssessmentInChangedoc:
+    """Tests for Quality Assessment section in changedoc subsequent-round prompt."""
+
+    def test_subsequent_prompt_with_changedoc_mode_has_quality_assessment(self):
+        """gap_report_mode='changedoc' includes Quality Assessment in subsequent prompt."""
+        prompt = _build_changedoc_subsequent_round_prompt(gap_report_mode="changedoc")
+        assert "Quality Assessment" in prompt
+        assert "User Experience Gaps" in prompt
+        assert "Remaining Gaps" in prompt
+        assert "Worth Another Iteration" in prompt
+        # "Already Strong" was removed to prevent glazing
+        assert "Already Strong" not in prompt
+
+    def test_subsequent_prompt_with_separate_mode_no_quality_assessment(self):
+        """gap_report_mode='separate' omits Quality Assessment from subsequent prompt."""
+        prompt = _build_changedoc_subsequent_round_prompt(gap_report_mode="separate")
+        assert "Quality Assessment" not in prompt
+
+    def test_subsequent_prompt_with_none_mode_no_quality_assessment(self):
+        """gap_report_mode='none' omits Quality Assessment from subsequent prompt."""
+        prompt = _build_changedoc_subsequent_round_prompt(gap_report_mode="none")
+        assert "Quality Assessment" not in prompt
+
+    def test_changedoc_section_passes_gap_report_mode(self):
+        """ChangedocSection uses gap_report_mode parameter for subsequent round."""
+        section = ChangedocSection(has_prior_answers=True, gap_report_mode="changedoc")
+        content = section.build_content()
+        assert "Quality Assessment" in content
+
+        section_separate = ChangedocSection(has_prior_answers=True, gap_report_mode="separate")
+        content_separate = section_separate.build_content()
+        assert "Quality Assessment" not in content_separate
+
+
+# ---------------------------------------------------------------------------
+# Gap report mode in decision section tests (Area 2e)
+# ---------------------------------------------------------------------------
+
+
+class TestGapReportModeInDecision:
+    """Tests for gap_report_mode in _build_checklist_gated_decision."""
+
+    def test_gated_decision_changedoc_mode_references_changedoc(self):
+        """gap_report_mode='changedoc' references changedoc Quality Assessment."""
+        from massgen.system_prompt_sections import _build_checklist_gated_decision
+
+        decision = _build_checklist_gated_decision(
+            checklist_items=["Check 1", "Check 2"],
+            gap_report_mode="changedoc",
+        )
+        # Should reference changedoc quality assessment, not a separate file
+        assert "changedoc" in decision.lower() or "quality assessment" in decision.lower()
+        # Should NOT require writing a separate gap report file
+        assert "tasks/checklist_gap_report.md" not in decision
+
+    def test_gated_decision_separate_mode_recommends_report(self):
+        """gap_report_mode='separate' recommends writing a gap report file."""
+        from massgen.system_prompt_sections import _build_checklist_gated_decision
+
+        decision = _build_checklist_gated_decision(
+            checklist_items=["Check 1"],
+            gap_report_mode="separate",
+        )
+        assert "gap report" in decision.lower() or "report" in decision.lower()
+
+    def test_gated_decision_none_mode_no_report(self):
+        """gap_report_mode='none' has no report requirement section."""
+        from massgen.system_prompt_sections import _build_checklist_gated_decision
+
+        decision = _build_checklist_gated_decision(
+            checklist_items=["Check 1"],
+            gap_report_mode="none",
+        )
+        # Should not have a Gap Report or Quality Assessment section header
+        assert "### Gap Report" not in decision
+        assert "### Quality Assessment" not in decision
+
+
+# ---------------------------------------------------------------------------
+# Anti-glazing, synthesis, and origin chain tests
+# ---------------------------------------------------------------------------
+
+
+class TestAntiGlazingAndSynthesis:
+    """Tests for anti-glazing, multi-source synthesis, and origin chain changes."""
+
+    def test_substantiveness_has_not_structural_examples(self):
+        """Substantiveness test includes concrete 'NOT structural' examples."""
+        analysis = _build_changedoc_checklist_analysis()
+        assert "do not upgrade" in analysis.lower()
+        assert "CSS tweaks" in analysis
+
+    def test_gap_analysis_anti_glazing(self):
+        """Gap analysis step explicitly says not to describe what works well."""
+        analysis = _build_changedoc_checklist_analysis()
+        assert "Do not describe what works well" in analysis
+
+    def test_gap_analysis_no_praise_padding(self):
+        """Gap analysis closing discourages padding with praise."""
+        analysis = _build_changedoc_checklist_analysis()
+        assert "do not pad with praise" in analysis
+
+    def test_quality_assessment_no_already_strong(self):
+        """Quality Assessment does NOT contain 'Already Strong' section."""
+        prompt = _build_changedoc_subsequent_round_prompt(gap_report_mode="changedoc")
+        assert "Already Strong" not in prompt
+
+    def test_quality_assessment_has_iteration_gate(self):
+        """Quality Assessment includes 'Worth Another Iteration?' gate."""
+        prompt = _build_changedoc_subsequent_round_prompt(gap_report_mode="changedoc")
+        assert "Worth Another Iteration" in prompt
+
+    def test_subsequent_prompt_uses_sources_reviewed(self):
+        """Subsequent round template uses 'Sources reviewed' not 'Based on'."""
+        prompt = _build_changedoc_subsequent_round_prompt()
+        assert "Sources reviewed" in prompt
+        # "Based on:" should NOT appear in the template header
+        # (it may appear in deliberation trail context, but not as the header field)
+        assert "**Based on:**" not in prompt
+
+    def test_origin_chain_arrow_notation(self):
+        """Template DEC examples use arrow chain notation for origin tracking."""
+        prompt = _build_changedoc_subsequent_round_prompt()
+        assert "\u2192" in prompt  # → character
+
+    def test_synthesizing_not_inheriting(self):
+        """Section heading says 'Synthesizing' not 'Inheriting'."""
+        prompt = _build_changedoc_subsequent_round_prompt()
+        assert "Synthesizing from prior answers" in prompt
+        assert "Inheriting from prior answers" not in prompt
+
+    def test_deliberation_trail_multi_source(self):
+        """Deliberation trail template shows multi-source synthesis."""
+        prompt = _build_changedoc_subsequent_round_prompt()
+        assert "synthesized from" in prompt

@@ -271,6 +271,7 @@ class AgentConfig:
     max_new_answers_per_agent: Optional[int] = None
     max_new_answers_global: Optional[int] = None
     checklist_require_gap_report: bool = True
+    gap_report_mode: str = "changedoc"  # "changedoc" | "separate" | "none"
     answer_novelty_requirement: str = "lenient"
     fairness_enabled: bool = True
     fairness_lead_cap_answers: int = 2

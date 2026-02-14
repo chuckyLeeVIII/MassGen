@@ -136,6 +136,7 @@ class SystemMessageBuilder:
         voting_sensitivity_override: Optional[str] = None,
         voting_threshold: Optional[int] = None,
         checklist_require_gap_report: bool = True,
+        gap_report_mode: str = "changedoc",
         answers_used: int = 0,
         answer_cap: Optional[int] = None,
         coordination_mode: str = "voting",
@@ -218,6 +219,7 @@ class SystemMessageBuilder:
                     answers_used=answers_used,
                     answer_cap=answer_cap,
                     checklist_require_gap_report=checklist_require_gap_report,
+                    gap_report_mode=gap_report_mode,
                     has_changedoc=changedoc_enabled,
                 ),
             )
@@ -234,6 +236,7 @@ class SystemMessageBuilder:
                     round_number=round_number,
                     voting_threshold=voting_threshold,
                     checklist_require_gap_report=checklist_require_gap_report,
+                    gap_report_mode=gap_report_mode,
                     answers_used=answers_used,
                     answer_cap=answer_cap,
                     has_changedoc=changedoc_enabled,
@@ -493,7 +496,7 @@ class SystemMessageBuilder:
             from massgen.system_prompt_sections import ChangedocSection
 
             has_prior_answers = bool(answers)
-            builder.add_section(ChangedocSection(has_prior_answers=has_prior_answers))
+            builder.add_section(ChangedocSection(has_prior_answers=has_prior_answers, gap_report_mode=gap_report_mode))
             logger.info(f"[SystemMessageBuilder] Added changedoc instructions for {agent_id} (prior_answers={has_prior_answers})")
 
         # Build and return the complete structured system prompt

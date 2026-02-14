@@ -637,7 +637,6 @@ class Orchestrator(ChatAgent):
                     "cwd",
                     None,
                 ),
-                "report_cutoff": 70,
                 # Pre-computed so stdio server doesn't need massgen imports
                 "required": _checklist_required_true(effective_t),
                 "cutoff": _checklist_confidence_cutoff(effective_t),
@@ -3966,6 +3965,9 @@ Your answer:"""
                                     if changedoc_content:
                                         answers_list = self.coordination_tracker.answers_by_agent.get(agent_id, [])
                                         if answers_list:
+                                            label = answers_list[-1].label
+                                            # Replace [SELF] placeholder with real answer label
+                                            changedoc_content = changedoc_content.replace("[SELF]", label)
                                             answers_list[-1].changedoc = changedoc_content
                                             logger.info(
                                                 "[Orchestrator] Attached changedoc (%d chars) to %s",
@@ -4554,6 +4556,11 @@ Your answer:"""
                         if ws_path:
                             changedoc_content = read_changedoc_from_workspace(Path(ws_path))
                             if changedoc_content:
+                                # Replace [SELF] with the label this answer will get
+                                agent_num = self.coordination_tracker._get_agent_number(agent_id)
+                                answer_num = len(self.coordination_tracker.answers_by_agent.get(agent_id, [])) + 1
+                                label = f"agent{agent_num}.{answer_num}"
+                                changedoc_content = changedoc_content.replace("[SELF]", label)
                                 changedoc_file = timestamped_dir / "changedoc.md"
                                 changedoc_file.write_text(changedoc_content)
                                 logger.info(
@@ -7271,6 +7278,11 @@ Your answer:"""
                     "checklist_require_gap_report",
                     True,
                 ),
+                gap_report_mode=getattr(
+                    self.config,
+                    "gap_report_mode",
+                    "changedoc",
+                ),
                 answers_used=self._get_agent_answer_count_for_limit(agent_id),
                 answer_cap=self.config.max_new_answers_per_agent,
                 coordination_mode=getattr(self.config, "coordination_mode", "voting"),
@@ -7331,6 +7343,7 @@ Your answer:"""
             sorted_answer_ids = sorted(normalized_answers.keys()) if normalized_answers else None
             # Get global agent mapping for consistent anonymous IDs across all components
             agent_mapping = self.coordination_tracker.get_reverse_agent_mapping()
+            answer_label_mapping = self.coordination_tracker.get_answer_label_mapping()
             _is_decomp = getattr(self.config, "coordination_mode", "voting") == "decomposition"
             # Gather changedocs from coordination tracker if enabled
             _agent_changedocs = self._gather_agent_changedocs()
@@ -7351,6 +7364,7 @@ Your answer:"""
                     agent_mapping=agent_mapping,
                     decomposition_mode=_is_decomp,
                     agent_changedocs=_agent_changedocs,
+                    answer_label_mapping=answer_label_mapping,
                 )
             else:
                 # Fallback to standard conversation building
@@ -7363,6 +7377,7 @@ Your answer:"""
                     agent_mapping=agent_mapping,
                     decomposition_mode=_is_decomp,
                     agent_changedocs=_agent_changedocs,
+                    answer_label_mapping=answer_label_mapping,
                 )
 
             # Inject restart context if this is a restart attempt (like multi-turn context)

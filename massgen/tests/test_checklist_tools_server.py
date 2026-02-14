@@ -20,6 +20,7 @@ from massgen.mcp_tools.checklist_tools_server import (
     _extract_score,
     _read_specs,
     build_server_config,
+    evaluate_checklist_submission,
     write_checklist_specs,
 )
 
@@ -305,6 +306,83 @@ class TestWriteChecklistSpecs:
         nested = tmp_path / "deep" / "nested" / "specs.json"
         write_checklist_specs([], {}, nested)
         assert nested.exists()
+
+
+class TestGapReportGateRemoval:
+    """Tests for gap report gate removal — verdict determined solely by T1-T5 scores."""
+
+    def test_verdict_not_overridden_by_poor_report(self, tmp_path):
+        """Checklist passes -> vote verdict, regardless of report quality."""
+        items = ["Quality check 1", "Quality check 2"]
+        state = {
+            "terminate_action": "vote",
+            "iterate_action": "new_answer",
+            "has_existing_answers": True,
+            "required": 2,
+            "cutoff": 70,
+        }
+        # All scores pass, no report path — verdict should be "vote"
+        result = evaluate_checklist_submission(
+            scores={"T1": 80, "T2": 85},
+            improvements="",
+            report_path="",
+            items=items,
+            state=state,
+        )
+        assert result["verdict"] == "vote"
+        # Report gate should NOT override
+        assert result.get("report_gate_triggered") is False
+
+    def test_report_diagnostics_still_in_result(self, tmp_path):
+        """Gap report diagnostics are included in result dict for transparency."""
+        items = ["Quality check 1"]
+        state = {
+            "terminate_action": "vote",
+            "iterate_action": "new_answer",
+            "has_existing_answers": True,
+            "required": 1,
+            "cutoff": 70,
+        }
+        result = evaluate_checklist_submission(
+            scores={"T1": 80},
+            improvements="",
+            report_path="",
+            items=items,
+            state=state,
+        )
+        # Report diagnostics should be in the result
+        assert "report" in result
+        assert isinstance(result["report"], dict)
+
+    def test_report_path_optional(self):
+        """No crash when report_path is empty or absent."""
+        items = ["Check 1"]
+        state = {
+            "terminate_action": "vote",
+            "iterate_action": "new_answer",
+            "has_existing_answers": True,
+            "required": 1,
+            "cutoff": 70,
+        }
+        # Empty report path
+        result = evaluate_checklist_submission(
+            scores={"T1": 90},
+            improvements="",
+            report_path="",
+            items=items,
+            state=state,
+        )
+        assert result["verdict"] == "vote"
+
+        # None-ish report path
+        result2 = evaluate_checklist_submission(
+            scores={"T1": 90},
+            improvements="",
+            report_path="nonexistent/path.md",
+            items=items,
+            state=state,
+        )
+        assert result2["verdict"] == "vote"
 
 
 class TestBuildServerConfig:

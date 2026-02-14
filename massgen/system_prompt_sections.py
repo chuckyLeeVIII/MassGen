@@ -272,14 +272,25 @@ lead somewhere that incremental refinement never would.
   has extra value — it explores paths that pure refinement misses.\""""
 
 
-def _build_changedoc_checklist_analysis() -> str:
+def _build_changedoc_checklist_analysis(has_prior_answers: bool = False) -> str:
     """Build changedoc-anchored analysis section for checklist modes.
 
     Replaces the generic _build_checklist_analysis() when changedoc is enabled.
     Grounds evaluation in the agent's decision journal rather than generic
-    quality assessment. 7 steps that map to the changedoc checklist items.
+    quality assessment.
+
+    Args:
+        has_prior_answers: Whether prior answers exist (enables round-aware T5 guidance).
     """
-    return """## Changedoc-Anchored Analysis
+    round_aware_t5_note = ""
+    if has_prior_answers:
+        round_aware_t5_note = (
+            "\n\nWhen prior answers exist, *novel* means a genuinely substantive improvement a user "
+            "would notice — not cosmetic changes, formatting tweaks, or feature adoption from "
+            "another agent's changedoc."
+        )
+
+    return f"""## Changedoc-Anchored Analysis
 
 Complete your full analysis before reading the Decision section below. Do not let
 the decision criteria influence your assessment.
@@ -344,17 +355,23 @@ Given the original question, describe in concrete bullet points:
 Do not anchor to what already exists. Describe the ideal decision set as if designing
 a spec from scratch.
 
+How many of these ideal decisions already exist across all answers? If there is high
+overlap — most answers already cover the same decisions — focus on execution depth and
+refinement quality rather than adding new decisions.
+
 ### Gap Analysis
 
-Now compare the current best answer against your ideal:
+Now compare the current best answer against your ideal. Do not describe what works well.
+Focus exclusively on what is missing, weak, or falls short.
+
 - **Missing decisions**: What decisions from your ideal set are absent from the changedoc?
 - **Weak decisions**: Where is rationale thin, alternatives shallow, or implementation
   fields inaccurate?
-- **Output gaps**: Does the deliverable achieve genuine quality, depth, and polish —
-  or is it merely functional?
+- **Output gaps**: Where does the deliverable fall short of genuine quality, depth, or
+  polish? Be specific about what is lacking, not about what is adequate.
 - **Traceability gaps**: Are there code choices that lack corresponding changedoc entries?
 - **Novelty deficit**: Is there at least one genuinely novel or ambitious element, or
-  does everything take the safe, obvious path?
+  does everything take the safe, obvious path?{round_aware_t5_note}
 
 Do not confuse *correctness fixes* with *quality improvements*. An answer can be
 technically correct and still have a shallow decision journal.
@@ -363,7 +380,28 @@ technically correct and still have a shallow decision journal.
 attempt rarely captures all important decisions.*
 
 If the current best genuinely matches your ideal with only cosmetic gaps remaining,
-say so — but be rigorous.
+say so explicitly and briefly — do not pad with praise.
+
+### Substantiveness Test
+
+Classify each planned change as:
+- **TRANSFORMATIVE**: Fundamentally different approach, architecture, or creative direction
+- **STRUCTURAL**: Meaningful redesign of a component, new capability, or significant quality lift —
+  the bar is: *would a user with no knowledge of the implementation notice this as a meaningfully
+  different experience?*
+- **INCREMENTAL**: Minor polish, formatting, or small additions
+
+The following are INCREMENTAL, not STRUCTURAL — do not upgrade them:
+- CSS tweaks, animation refinements, reduced-motion support, async decoding
+- Adding source notes, attribution, or citation formatting
+- Adding test tooling, QA scripts, or developer-facing infrastructure
+- Adding individual keyboard shortcuts (Home/End, etc.)
+- Accessibility micro-fixes (aria labels, alt text on existing elements)
+- Reformatting, reordering sections, or renaming variables
+
+If no planned changes are TRANSFORMATIVE or STRUCTURAL, seriously consider whether
+further iteration will produce meaningful improvement — or just accumulate incremental
+changes. Voting may be the better choice.
 
 ### Fresh Approach Consideration
 
@@ -374,7 +412,9 @@ somewhere that incremental refinement of existing decisions never would?
 
 - Are all current changedocs converging on the same basic decisions? If so, varying
   has extra value — it explores decision paths that pure refinement misses.
-- Could challenging a core assumption in the changedoc unlock a better outcome?\""""
+- Could challenging a core assumption in the changedoc unlock a better outcome?
+- Could FEWER decisions produce a better result? Quality often comes from restraint —
+  removing weak decisions can strengthen the overall answer more than adding new ones.\""""
 
 
 def _build_checklist_decision(
@@ -519,34 +559,24 @@ def _build_checklist_gated_decision(
     terminate_action: str = "vote",
     iterate_action: str = "new_answer",
     require_gap_report: bool = True,
+    gap_report_mode: str = "changedoc",
 ) -> str:
     """Build checklist_gated decision section (tool-gated, hidden threshold).
 
     Unlike checklist/checklist_scored, this mode hides the threshold, cutoff,
     and required count from the agent. The agent rates confidence honestly,
     submits scores via the submit_checklist MCP tool, and follows the verdict.
+
+    Args:
+        gap_report_mode: Controls report instructions.
+            "changedoc": References changedoc Quality Assessment (no separate file).
+            "separate": Recommends writing a gap report file (informational, not gated).
+            "none": No report instructions.
     """
     numbered = "\n".join(f"  T{i+1}. {item}  → **___% confidence**" for i, item in enumerate(checklist_items))
-    report_requirement = (
-        "### Gap Report (Required)\n\n"
-        "Before calling `submit_checklist`, you MUST write a markdown gap report in your workspace\n"
-        "(for example: `tasks/checklist_gap_report.md`).\n\n"
-        "The report must be comprehensive and concrete:\n"
-        "- Start with **Output Quality**: evaluate the actual result from the user's perspective.\n"
-        "  Is this something you would be proud to deliver? What would make it more impressive,\n"
-        "  richer, or more polished? Do not conflate 'works correctly' with 'high quality.'\n"
-        "  **Before writing this section**, use whatever tools you have to experience the output\n"
-        "  the way a user would — render it, screenshot it, open it, listen to it, read the final\n"
-        "  artifact. Do not evaluate output quality from source code alone.\n"
-        "- Then cover additional angles: requirements fit, correctness, depth/richness, UX/polish,\n"
-        "  accessibility, performance, reliability, security, maintainability, and testing/validation.\n"
-        "- For each gap, explain what is missing and what specific change should be made.\n"
-        "- Include a section named `Already Good Enough` listing only aspects that genuinely meet\n"
-        "  a high quality bar — not things that merely exist or function. 'Has responsive layout'\n"
-        "  is not a strength worth listing; 'layout handles all breakpoints with considered\n"
-        "  typography' might be.\n"
-    )
-    if not require_gap_report:
+    if gap_report_mode == "changedoc":
+        report_requirement = "### Quality Assessment\n\n" "Your changedoc's Quality Assessment section serves as your gap analysis.\n" "Reference it when filling in your improvements summary below.\n"
+    elif gap_report_mode == "separate":
         report_requirement = (
             "### Gap Report (Recommended)\n\n"
             "Write a markdown gap report in your workspace (for example:\n"
@@ -555,6 +585,9 @@ def _build_checklist_gated_decision(
             "Include an `Already Good Enough` section listing only aspects that genuinely meet a high\n"
             "bar. If you create one, pass it via `report_path`.\n"
         )
+    else:
+        # "none" — no report instructions
+        report_requirement = ""
 
     return f"""---
 
@@ -2396,6 +2429,7 @@ class EvaluationSection(SystemPromptSection):
         answers_used: int = 0,
         answer_cap: Optional[int] = None,
         checklist_require_gap_report: bool = True,
+        gap_report_mode: str = "changedoc",
         has_changedoc: bool = False,
     ):
         super().__init__(
@@ -2411,6 +2445,7 @@ class EvaluationSection(SystemPromptSection):
         self.answers_used = answers_used
         self.answer_cap = answer_cap
         self.checklist_require_gap_report = checklist_require_gap_report
+        self.gap_report_mode = gap_report_mode
         self.has_changedoc = has_changedoc
 
     def build_content(self) -> str:
@@ -2508,7 +2543,7 @@ Your goal is to iteratively refine answers until they meet the quality bar.
             threshold = self.voting_threshold if self.voting_threshold is not None else 5
 
             items = _CHECKLIST_ITEMS_CHANGEDOC if self.has_changedoc else _CHECKLIST_ITEMS
-            analysis = _build_changedoc_checklist_analysis() if self.has_changedoc else _build_checklist_analysis()
+            analysis = _build_changedoc_checklist_analysis(has_prior_answers=(self.answers_used > 0)) if self.has_changedoc else _build_checklist_analysis()
             if effective_sensitivity == "checklist":
                 decision = _build_checklist_decision(
                     threshold,
@@ -2528,10 +2563,11 @@ Your goal is to iteratively refine answers until they meet the quality bar.
 {decision}"""
         elif effective_sensitivity == "checklist_gated":
             items = _CHECKLIST_ITEMS_CHANGEDOC if self.has_changedoc else _CHECKLIST_ITEMS
-            analysis = _build_changedoc_checklist_analysis() if self.has_changedoc else _build_checklist_analysis()
+            analysis = _build_changedoc_checklist_analysis(has_prior_answers=(self.answers_used > 0)) if self.has_changedoc else _build_checklist_analysis()
             decision = _build_checklist_gated_decision(
                 items,
                 require_gap_report=self.checklist_require_gap_report,
+                gap_report_mode=self.gap_report_mode,
             )
             evaluation_section = f"""{analysis}
 
@@ -2650,6 +2686,7 @@ class DecompositionSection(SystemPromptSection):
         answers_used: int = 0,
         answer_cap: Optional[int] = None,
         checklist_require_gap_report: bool = True,
+        gap_report_mode: str = "changedoc",
         has_changedoc: bool = False,
     ):
         super().__init__(
@@ -2663,6 +2700,7 @@ class DecompositionSection(SystemPromptSection):
         self.answers_used = answers_used
         self.answer_cap = answer_cap
         self.checklist_require_gap_report = checklist_require_gap_report
+        self.gap_report_mode = gap_report_mode
         self.has_changedoc = has_changedoc
 
     def _build_decision_block(self) -> str:
@@ -2673,7 +2711,7 @@ class DecompositionSection(SystemPromptSection):
 
             if self.voting_sensitivity in ("checklist", "checklist_scored"):
                 items = _CHECKLIST_ITEMS_CHANGEDOC if self.has_changedoc else _CHECKLIST_ITEMS
-                analysis = _build_changedoc_checklist_analysis() if self.has_changedoc else _build_checklist_analysis()
+                analysis = _build_changedoc_checklist_analysis(has_prior_answers=(self.answers_used > 0)) if self.has_changedoc else _build_checklist_analysis()
                 if self.voting_sensitivity == "checklist":
                     decision = _build_checklist_decision(
                         self.voting_threshold,
@@ -2700,12 +2738,13 @@ Both are terminal actions that end your round.
 {decision}"""
             elif self.voting_sensitivity == "checklist_gated":
                 items = _CHECKLIST_ITEMS_CHANGEDOC if self.has_changedoc else _CHECKLIST_ITEMS
-                analysis = _build_changedoc_checklist_analysis() if self.has_changedoc else _build_checklist_analysis()
+                analysis = _build_changedoc_checklist_analysis(has_prior_answers=(self.answers_used > 0)) if self.has_changedoc else _build_checklist_analysis()
                 decision = _build_checklist_gated_decision(
                     items,
                     terminate_action="stop",
                     iterate_action="new_answer",
                     require_gap_report=self.checklist_require_gap_report,
+                    gap_report_mode=self.gap_report_mode,
                 )
                 return f"""**CHOOSING THE RIGHT TOOL — `new_answer` vs `stop`:**
 Both are terminal actions that end your round.
@@ -2915,7 +2954,7 @@ existing ideas.
 ## Decisions
 
 ### DEC-001: [Decision title]
-**Origin:** [your answer label] — NEW
+**Origin:** [SELF] — NEW
 **Choice:** [What you chose]
 **Why:** [Rationale tied to task requirements]
 **Alternatives considered:**
@@ -2933,7 +2972,38 @@ existing ideas.
 
 Write concisely — explain your thinking to a colleague who will pick up your work."""
 
-_CHANGEDOC_SUBSEQUENT_ROUND_PROMPT = """## Change Document (Decision Journal)
+
+def _build_changedoc_subsequent_round_prompt(gap_report_mode: str = "changedoc") -> str:
+    """Build subsequent-round changedoc instructions.
+
+    Args:
+        gap_report_mode: Controls Quality Assessment placement.
+            "changedoc" appends Quality Assessment section to the template.
+            "separate" / "none" omit it.
+    """
+    quality_assessment = ""
+    if gap_report_mode == "changedoc":
+        quality_assessment = """
+
+### Quality Assessment
+
+Before submitting, step back and assess gaps in the overall result. Do not describe
+what works well — focus exclusively on what falls short.
+
+**User Experience Gaps**: Imagine receiving this output with no context about how it was
+built. Walk through it as a user would — read it, use it, evaluate the final artifact.
+Where does the experience fall short? What would disappoint, confuse, or feel incomplete?
+
+**Remaining Gaps**: For each gap, describe what is missing and what specific change would
+address it. Be concrete — "improve error handling" is too vague; "add user-facing error
+messages for network timeouts in the upload flow" is actionable.
+
+**Worth Another Iteration?**: If all remaining gaps are incremental (cosmetic polish,
+minor additions, formatting), state that clearly — do not manufacture reasons to iterate.
+Only recommend further iteration if at least one gap represents a STRUCTURAL improvement
+a user would notice."""
+
+    return f"""## Change Document (Decision Journal)
 
 **Before you start writing your answer**, create `tasks/changedoc.md` in your workspace.
 This is your decision journal — start it first by inheriting from the prior agent's changedoc,
@@ -2948,16 +3018,24 @@ alongside their answer).
 3. **Update the Implementation fields** to reference YOUR code locations (the prior agent's line numbers refer to their frozen snapshot, not yours).
 4. **Submit your answer** via `new_answer` once your work is complete. The changedoc should already be up to date.
 
-### Inheriting from prior answers
+### Synthesizing from prior answers
 
-When you build on another agent's work:
+Draw from ALL available answers, not just one. The DEC Origin fields track per-decision
+lineage, so you do not need a single "based on" anchor. For each decision, choose the
+best version across all answers:
 
-1. **Keep their existing decisions** that you agree with. Preserve the Origin field — do not change who first introduced a decision.
-2. **Modify decisions** when you disagree. Update the Origin to show modification (e.g., `agent1.1, modified by [your label]`). Explain the change in the Deliberation Trail.
-3. **Add genuinely new decisions** with Origin marked as `[your label] — NEW`. These are ideas not present in any prior answer — novel approaches, new features, or original solutions you introduce.
+1. **Keep the best version of each decision** across all answers. Preserve the FULL Origin chain — do not truncate
+who first introduced a decision. If agent1.1 created it and agent1.2 kept it, the Origin is
+`agent1.1 → agent1.2 (kept)`, not just `agent1.2`.
+2. **Modify decisions** when you disagree. Append to the Origin chain (e.g., `agent1.1 → agent1.2 (kept) → [SELF] (modified)`). Explain the change in the Deliberation Trail.
+3. **Add genuinely new decisions** with Origin marked as `[SELF] — NEW`. These are ideas not present in any prior answer — novel approaches, new features, or original solutions you introduce.
 4. **Update the Summary** to reflect your version of the answer.
 5. **Update Implementation fields** to point to your code. The prior agent's code references point to their frozen files — your implementation may have different paths, symbols, or line numbers.
 6. **Append to the Deliberation Trail** to record what changed and why, flagging NEW ideas explicitly.
+
+Five deeply-reasoned decisions beat twelve adequate ones. You may REMOVE or MERGE decisions
+from the inherited changedoc if they are redundant, weak, or dilute the overall quality.
+Fewer, stronger decisions produce better outcomes than accumulating every idea.
 
 If you start fresh rather than building on an existing answer, note in the Deliberation Trail why you chose a different approach.
 
@@ -2969,14 +3047,17 @@ Format: `relative/path/file.py:L10-25` → `ClassName.method()` — brief descri
 
 ### Answer labels
 
-Use the answer labels shown in `<CURRENT ANSWERS>` (e.g., `agent1.1`, `agent2.1`) when referencing specific answers. These uniquely identify a particular version of an agent's work.
+The answer labels in `<CURRENT ANSWERS>` headers (e.g., `<agent1.2>`, `<agent2.1>`) uniquely identify each
+version of an agent's work. Use these exact labels when referencing OTHER agents' answers. Use `[SELF]`
+when referencing your own work — the system will replace it with your real label (e.g., `agent1.2`)
+when your answer is submitted.
 
 ### Template
 
 ```markdown
 # Change Document
 
-**Based on:** [answer label, e.g., agent1.1]
+**Sources reviewed:** [list ALL prior answer labels you drew from, e.g., agent1.1, agent2.1]
 
 ## Summary
 [1-2 sentences describing your approach]
@@ -2984,7 +3065,7 @@ Use the answer labels shown in `<CURRENT ANSWERS>` (e.g., `agent1.1`, `agent2.1`
 ## Decisions
 
 ### DEC-001: [Inherited decision title]
-**Origin:** agent1.1
+**Origin:** agent1.1 → agent1.2 (kept)
 **Choice:** [What was chosen]
 **Why:** [Rationale]
 **Alternatives considered:**
@@ -2993,7 +3074,7 @@ Use the answer labels shown in `<CURRENT ANSWERS>` (e.g., `agent1.1`, `agent2.1`
 - `path/to/file.py:L10-42` → `ClassName.method()` — [brief mechanism description]
 
 ### DEC-002: [Modified decision]
-**Origin:** agent1.1, modified by [your label]
+**Origin:** agent1.1 → agent1.2 (kept) → [SELF] (modified)
 **Choice:** [Your revised choice]
 **Why:** [Why you changed it — agent1.1 chose X, but Y is better because...]
 **Alternatives considered:**
@@ -3002,7 +3083,7 @@ Use the answer labels shown in `<CURRENT ANSWERS>` (e.g., `agent1.1`, `agent2.1`
 - `path/to/file.py:L50-75` → `new_function()` — [mechanism]
 
 ### DEC-003: [Your new idea]
-**Origin:** [your label] — NEW
+**Origin:** [SELF] — NEW
 **Choice:** [What you introduced]
 **Why:** [Rationale — this wasn't in any prior answer]
 **Implementation:**
@@ -3010,17 +3091,20 @@ Use the answer labels shown in `<CURRENT ANSWERS>` (e.g., `agent1.1`, `agent2.1`
 
 ## Deliberation Trail
 
-### [your label] (based on agent1.1):
-- DEC-001: Kept — [brief reason]
-- DEC-002: Modified — agent1.1 used X, changed to Y because [reason]
-- DEC-003: NEW — [what this adds that wasn't there before]
+### [SELF] (synthesized from agent1.1, agent2.1):
+- DEC-001: Kept from agent1.1 — [brief reason]
+- DEC-002: Modified from agent1.1 — used X, changed to Y because [reason]
+- DEC-003: Adopted from agent2.1 — [why this version was better]
+- DEC-004: NEW — [what this adds that wasn't there before]
 
 ## Key Changes from Prior
 - [Substantive change 1]
 - [Substantive change 2]
 ```
+{quality_assessment}
 
 Write concisely — explain your thinking to a colleague who will pick up your work."""
+
 
 _CHANGEDOC_PRESENTER_INSTRUCTIONS = """
 ### Change Document Consolidation
@@ -3058,17 +3142,18 @@ class ChangedocSection(SystemPromptSection):
         has_prior_answers: Whether other agents' answers are visible.
     """
 
-    def __init__(self, has_prior_answers: bool = False):
+    def __init__(self, has_prior_answers: bool = False, gap_report_mode: str = "changedoc"):
         super().__init__(
             title="Change Document",
             priority=Priority.MEDIUM,
             xml_tag="changedoc_instructions",
         )
         self.has_prior_answers = has_prior_answers
+        self.gap_report_mode = gap_report_mode
 
     def build_content(self) -> str:
         if self.has_prior_answers:
-            return _CHANGEDOC_SUBSEQUENT_ROUND_PROMPT
+            return _build_changedoc_subsequent_round_prompt(gap_report_mode=self.gap_report_mode)
         return _CHANGEDOC_FIRST_ROUND_PROMPT
 
 

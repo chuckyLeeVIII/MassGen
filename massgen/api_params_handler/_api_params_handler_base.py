@@ -132,6 +132,7 @@ class APIParamsHandlerBase(ABC):
             "voting_sensitivity",
             "voting_threshold",
             "checklist_require_gap_report",
+            "gap_report_mode",
             # Decomposition mode parameters (handled by orchestrator, not passed to API)
             "coordination_mode",
             "presenter_agent",

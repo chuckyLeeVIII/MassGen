@@ -19,7 +19,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import re
 from pathlib import Path
 from typing import Any, Dict
 
@@ -92,30 +91,24 @@ def _resolve_report_file(report_path: str, state: Dict[str, Any]) -> tuple[Path 
 
 
 def _evaluate_gap_report(report_path: str, state: Dict[str, Any]) -> Dict[str, Any]:
-    """Evaluate markdown gap report quality independently of checklist scores."""
-    require_report = bool(state.get("require_gap_report", True))
-    report_cutoff = int(state.get("report_cutoff", 70))
+    """Check gap report file existence for diagnostics (no gate logic).
 
+    The gap report is informational only — it never overrides the checklist verdict.
+    Basic file existence and non-empty checks are retained for transparency in the
+    explanation, but no heuristic scoring or keyword matching is performed.
+    """
     result: Dict[str, Any] = {
-        "required": require_report,
         "provided": bool((report_path or "").strip()),
         "path": (report_path or "").strip(),
-        "score": 0,
-        "cutoff": report_cutoff,
-        "passed": not require_report,
+        "passed": True,  # Always passes — no gate
         "issues": [],
-        "categories_hit": [],
-        "actionable_items": 0,
-        "has_good_enough_section": False,
     }
 
-    if not require_report and not result["provided"]:
+    if not result["provided"]:
         return result
 
     resolved, error = _resolve_report_file(report_path, state)
     if error:
-        if not require_report:
-            return result
         result["issues"].append(error)
         return result
     if resolved is None:
@@ -135,76 +128,12 @@ def _evaluate_gap_report(report_path: str, state: Dict[str, Any]) -> Dict[str, A
         result["issues"].append(f"Unable to read report file: {exc}")
         return result
 
-    stripped = report_text.strip()
-    if not stripped:
+    if not report_text.strip():
         result["issues"].append("Report file is empty.")
         return result
 
-    lowered = stripped.lower()
-    categories = {
-        "output_quality": [
-            "output quality",
-            "result quality",
-            "end result",
-            "deliverable",
-            "user perspective",
-            "craft",
-            "impression",
-            "richness",
-            "artifact",
-            "proud to deliver",
-        ],
-        "requirements_scope": ["requirements", "scope", "user intent", "acceptance criteria"],
-        "correctness": ["correctness", "logic", "bug", "edge case", "failure mode"],
-        "quality_polish": ["ux", "ui", "polish", "clarity", "content quality", "accessibility", "a11y"],
-        "performance_reliability": ["performance", "latency", "reliability", "robustness", "error handling"],
-        "security_safety": ["security", "privacy", "safety", "permissions", "compliance"],
-        "testing_validation": ["test", "validation", "verification", "observability", "monitoring", "metrics"],
-        "decision_quality": [
-            "decision",
-            "changedoc",
-            "rationale",
-            "alternative",
-            "traceability",
-            "implementation field",
-            "origin",
-            "missing decision",
-            "weak rationale",
-        ],
-    }
-    categories_hit = [category for category, keywords in categories.items() if any(keyword in lowered for keyword in keywords)]
-    result["categories_hit"] = categories_hit
-
-    actionable_items = len(re.findall(r"(?m)^\s*(?:[-*]|\d+[.)])\s+", stripped))
-    result["actionable_items"] = actionable_items
-    result["has_good_enough_section"] = bool(
-        re.search(r"(?i)\b(already good enough|good enough|already strong|keep as[- ]is)\b", stripped),
-    )
-
-    length_score = min(25, int(len(stripped) / 40))
-    coverage_score = min(35, len(categories_hit) * 5)
-    actionability_score = min(25, actionable_items * 2)
-    good_enough_score = 15 if result["has_good_enough_section"] else 0
-    score = length_score + coverage_score + actionability_score + good_enough_score
-    result["score"] = score
-
-    if len(categories_hit) < 5:
-        result["issues"].append("Report is not broad enough across evaluation angles.")
-    if actionable_items < 6:
-        result["issues"].append("Report needs more concrete, actionable improvement items.")
-    if not result["has_good_enough_section"]:
-        result["issues"].append("Report must include what is already good enough.")
-    if score < report_cutoff:
-        result["issues"].append(
-            f"Report score {score} is below cutoff {report_cutoff}.",
-        )
-
-    result["passed"] = score >= report_cutoff and not result["issues"]
-    if not require_report:
-        # Keep diagnostics, but don't fail the gate when config disables it.
-        result["passed"] = True
-        result["issues"] = []
-
+    # Report exists and is non-empty — note it for transparency
+    result["file_exists"] = True
     return result
 
 
@@ -237,16 +166,13 @@ def evaluate_checklist_submission(
         items_detail.append({"id": key, "score": score, "passed": passed})
 
     report_eval = _evaluate_gap_report(report_path, state)
-    report_gate_triggered = False
 
     if not has_existing_answers:
         verdict = iterate_action
         explanation = f"First answer — no existing answers to evaluate. Verdict: {verdict}."
     else:
+        # Verdict determined solely by T1-T5 scores — no report gate
         verdict = terminate_action if true_count >= required else iterate_action
-        if report_eval.get("required", True) and not report_eval.get("passed", False):
-            verdict = iterate_action
-            report_gate_triggered = True
 
         if verdict == iterate_action:
             failed_ids = [d["id"] for d in items_detail if not d["passed"]]
@@ -254,8 +180,6 @@ def evaluate_checklist_submission(
             explanation = f"{true_count} of {len(items)} items passed (required: {required}). " f"Verdict: {verdict}. "
             if failed_ids:
                 explanation += f"Items that need improvement: {', '.join(failed_ids)}. "
-            if report_gate_triggered:
-                explanation += "Gap report quality is not yet sufficient; expand the report across " "more angles with more concrete actions before stopping. "
             explanation += "Your new answer MUST make material changes — do NOT simply copy or " "resubmit the same content."
             if improvements_text:
                 explanation += (
@@ -266,10 +190,12 @@ def evaluate_checklist_submission(
         else:
             explanation = f"{true_count} of {len(items)} items passed (required: {required}). " f"Verdict: {verdict}."
 
-    report_summary = f" Gap report score: {report_eval.get('score', 0)}/{report_eval.get('cutoff', 70)} " f"({'pass' if report_eval.get('passed') else 'fail'})."
-    if report_eval.get("issues"):
-        report_summary += f" Report issues: {'; '.join(report_eval['issues'])}."
-    explanation += report_summary
+    # Include report diagnostics for transparency (informational only)
+    if report_eval.get("provided"):
+        report_summary = " Gap report provided."
+        if report_eval.get("issues"):
+            report_summary += f" Report notes: {'; '.join(report_eval['issues'])}."
+        explanation += report_summary
 
     return {
         "verdict": verdict,
@@ -278,7 +204,7 @@ def evaluate_checklist_submission(
         "required": required,
         "items": items_detail,
         "report": report_eval,
-        "report_gate_triggered": report_gate_triggered,
+        "report_gate_triggered": False,
     }
 
 
