@@ -977,7 +977,11 @@ class ReviewChangesPanel(ReworkControlsMixin, Vertical):
         full_path = Path(isolated_path) / file_path
         try:
             content = full_path.read_text(encoding="utf-8")
-        except Exception:
+        except Exception as e:
+            try:
+                self.app.notify(f"Cannot open {file_path}: {e}", severity="error", timeout=4)
+            except Exception:
+                pass
             return
 
         selected_file_key = self._selected_file
@@ -987,7 +991,11 @@ class ReviewChangesPanel(ReworkControlsMixin, Vertical):
                 return
             try:
                 full_path.write_text(updated_content, encoding="utf-8")
-            except Exception:
+            except Exception as e:
+                try:
+                    self.app.notify(f"Could not save {file_path}: {e}", severity="error", timeout=4)
+                except Exception:
+                    pass
                 return
             self._refresh_file_diff(selected_file_key, context_path, isolated_path, file_path)
 

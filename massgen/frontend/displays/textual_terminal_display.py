@@ -2185,7 +2185,6 @@ class TextualTerminalDisplay(TerminalDisplay):
 
         action = rework_info.get("action", "rework")
         feedback = (rework_info.get("feedback") or "").strip()
-        rework_info.get("agent_id", "")
 
         if not feedback:
             try:
@@ -10004,9 +10003,6 @@ Type your question and press Enter to ask the agents.
                 winner_id: The winning agent's ID
                 answer_preview: Preview of the winning answer
             """
-            # Get model name for richer display
-            self.coordination_display.agent_models.get(winner_id, "")
-
             # 1. Update StatusBar with winner announcement
             if self._status_bar:
                 agent_count = len(self.coordination_display.agent_ids)

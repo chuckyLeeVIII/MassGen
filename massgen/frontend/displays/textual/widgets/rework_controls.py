@@ -10,7 +10,7 @@ constants to avoid CSS/test ID collisions.
 from typing import Optional
 
 try:
-    from textual.containers import Container, Horizontal
+    from textual.containers import Horizontal
     from textual.widgets import Button, Input, Static
 
     TEXTUAL_AVAILABLE = True
@@ -114,7 +114,7 @@ class ReworkControlsMixin:
         feedback_placeholder: str = "e.g., fix the import order, add error handling...",
         continue_label: str = "Continue Planning",
         quick_edit_label: str = "Quick Edit (Single Agent)",
-    ) -> "Container":
+    ):
         """Yield a Container with feedback Input and Continue/Quick Edit buttons.
 
         Args:
@@ -126,11 +126,6 @@ class ReworkControlsMixin:
         Yields:
             A single Container widget with the rework controls inside.
         """
-        container = Container(classes="rework-controls")
-        container._nodes = []  # Will be composed by Textual
-
-        # We yield the container as a context manager pattern
-        # But since this is a mixin, we return composable widgets
         from textual.containers import Container as _Container
 
         feedback_input = Input(

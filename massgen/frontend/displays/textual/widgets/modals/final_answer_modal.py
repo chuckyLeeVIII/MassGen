@@ -686,15 +686,15 @@ class FinalAnswerModal(BaseModal):
                 ),
             )
         else:
-            self._ctrl_c_warned = True
             try:
                 self.app.notify(
                     "Press Ctrl+C again to reject all changes and close",
                     severity="warning",
                     timeout=3,
                 )
+                self._ctrl_c_warned = True
             except Exception:
-                pass
+                pass  # Don't enter warned state if notification failed
 
     def action_switch_answer_tab(self) -> None:
         """Switch to Answer tab via keyboard shortcut."""

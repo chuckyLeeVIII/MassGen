@@ -10496,7 +10496,7 @@ INSTRUCTIONS FOR NEXT ATTEMPT:
         if hasattr(self, "coordination_ui") and self.coordination_ui:
             display = getattr(self.coordination_ui, "display", None)
 
-        logger.info(f"[Orchestrator] Review phase: display={display}, has_modal={hasattr(display, 'show_change_review_modal') if display else False}")
+        logger.info(f"[Orchestrator] Review phase: display={display}, has_final_answer_modal={hasattr(display, 'show_final_answer_modal') if display else False}")
 
         if display and hasattr(display, "show_final_answer_modal"):
             try:
@@ -11283,8 +11283,9 @@ Then call either submit(confirmed=True) if the answer is satisfactory, or restar
         if self._isolation_manager:
             try:
                 active_contexts = [ctx for ctx in self._isolation_manager.list_contexts() if ctx]
-            except Exception:
+            except Exception as e:
                 # Fail closed: if we cannot inspect isolation state, keep existing behavior.
+                logger.warning("[Orchestrator] Failed to inspect isolation state: %s", e)
                 active_contexts = [object()]
 
             if active_contexts:
