@@ -9143,6 +9143,10 @@ Your answer:"""
 
                     # Update workflow phase
                     self.workflow_phase = "presenting"
+
+                    # Show workspace modal in no-git mode before returning
+                    await self._show_workspace_modal_if_needed()
+
                     log_stream_chunk("orchestrator", "done", None, self._selected_agent)
                     yield StreamChunk(type="done", source=self._selected_agent)
                     return  # Skip post-evaluation and all remaining logic
@@ -9190,6 +9194,9 @@ Your answer:"""
                     "end_round_tracking",
                 ):
                     selected_agent.backend.end_round_tracking("post_evaluation")
+
+        # Show workspace modal in no-git mode (runs before clear_workspace below)
+        await self._show_workspace_modal_if_needed()
 
         # Review isolated changes if write_mode isolation was enabled
         # Runs AFTER post-evaluation so the user sees the full picture before approving files
@@ -10513,6 +10520,16 @@ INSTRUCTIONS FOR NEXT ATTEMPT:
                 if agent and hasattr(agent, "backend") and hasattr(agent.backend, "config"):
                     model_name = agent.backend.config.get("model", "")
 
+                # Resolve workspace path (final from logs, fallback to live)
+                workspace_path = self._resolve_final_workspace_path(selected_agent_id)
+                if not workspace_path and agent and hasattr(agent, "backend"):
+                    fm = getattr(agent.backend, "filesystem_manager", None)
+                    if fm is not None:
+                        try:
+                            workspace_path = str(fm.get_current_workspace())
+                        except Exception:
+                            pass
+
                 review_result = await display.show_final_answer_modal(
                     changes=all_changes,
                     answer_content=self._final_presentation_content or "",
@@ -10520,6 +10537,7 @@ INSTRUCTIONS FOR NEXT ATTEMPT:
                     agent_id=selected_agent_id,
                     model_name=model_name,
                     context_paths=context_paths_summary,
+                    workspace_path=workspace_path,
                 )
                 logger.info(f"[Orchestrator] Final answer modal returned: approved={review_result.approved}")
             except Exception as e:
@@ -11228,6 +11246,96 @@ Then call either submit(confirmed=True) if the answer is satisfactory, or restar
             return True
 
         return False
+
+    def _resolve_final_workspace_path(self, agent_id: Optional[str]) -> Optional[str]:
+        """Resolve the final workspace path from the log directory.
+
+        After a run completes, the live workspace is cleared. The final snapshot
+        lives under log_session_dir/turn_*/attempt_*/final/agent_*/workspace.
+        """
+        if not agent_id:
+            return None
+        log_dir = get_log_session_dir()
+        if not log_dir:
+            return None
+
+        log_path = Path(log_dir)
+        # Try turn_*/attempt_*/final/agent_*/workspace (most common)
+        for turn_dir in sorted(log_path.glob("turn_*"), reverse=True):
+            for attempt_dir in sorted(turn_dir.glob("attempt_*"), reverse=True):
+                ws = attempt_dir / "final" / agent_id / "workspace"
+                if ws.exists() and ws.is_dir():
+                    return str(ws)
+
+        # Fallback: direct final/ directory
+        ws = log_path / "final" / agent_id / "workspace"
+        if ws.exists() and ws.is_dir():
+            return str(ws)
+
+        return None
+
+    async def _show_workspace_modal_if_needed(self) -> None:
+        """Show the final answer modal with workspace tab in no-git (no-isolation) mode.
+
+        Called from _present_final_answer in both the skip-presentation and
+        normal-presentation paths.  Must run BEFORE clear_workspace().
+        """
+        if self._isolation_manager:
+            try:
+                active_contexts = [ctx for ctx in self._isolation_manager.list_contexts() if ctx]
+            except Exception:
+                # Fail closed: if we cannot inspect isolation state, keep existing behavior.
+                active_contexts = [object()]
+
+            if active_contexts:
+                return
+
+        display = None
+        if hasattr(self, "coordination_ui") and self.coordination_ui:
+            display = getattr(self.coordination_ui, "display", None)
+
+        if not display or not hasattr(display, "show_final_answer_modal"):
+            return
+
+        agent = self.agents.get(self._selected_agent)
+
+        # Try final workspace from logs first, fall back to live workspace
+        # (live workspace hasn't been cleared yet at this point)
+        workspace_path = self._resolve_final_workspace_path(self._selected_agent)
+        if not workspace_path and agent:
+            fm = getattr(getattr(agent, "backend", None), "filesystem_manager", None)
+            if fm:
+                try:
+                    ws = fm.get_current_workspace()
+                    if ws and Path(ws).is_dir() and any(Path(ws).iterdir()):
+                        workspace_path = str(ws)
+                except Exception:
+                    pass
+
+        logger.info(
+            f"[Orchestrator] No-git workspace modal: workspace_path={workspace_path}, " f"agent={self._selected_agent}",
+        )
+
+        if not workspace_path:
+            logger.info(
+                "[Orchestrator] No-git workspace path unavailable; " "opening answer-only final modal",
+            )
+
+        try:
+            model_name = ""
+            if agent and hasattr(agent, "backend") and hasattr(agent.backend, "config"):
+                model_name = agent.backend.config.get("model", "")
+
+            await display.show_final_answer_modal(
+                changes=[],
+                answer_content=self._final_presentation_content or "",
+                vote_results=self._get_vote_results(),
+                agent_id=self._selected_agent or "",
+                model_name=model_name,
+                workspace_path=workspace_path,
+            )
+        except Exception as e:
+            logger.warning(f"[Orchestrator] Workspace modal failed: {e}")
 
     def _get_vote_results(self) -> Dict[str, Any]:
         """Get current vote results and statistics."""

@@ -2016,13 +2016,15 @@ class TextualTerminalDisplay(TerminalDisplay):
         post_eval_content: Optional[str] = None,
         post_eval_status: str = "none",
         context_paths: Optional[Dict] = None,
+        workspace_path: Optional[str] = None,
     ) -> "ReviewResult":
         """Show the tabbed Final Answer modal with optional Review Changes tab.
 
         Combines the final answer presentation with diff review into a single
         modal. The Answer tab shows vote info and the winning answer. The
         Review Changes tab (shown only when changes exist) provides the full
-        diff review UI.
+        diff review UI. When no changes exist but workspace_path is set,
+        a Workspace browser tab is shown instead.
 
         Args:
             changes: List of context change dicts (same format as show_change_review_modal)
@@ -2033,6 +2035,7 @@ class TextualTerminalDisplay(TerminalDisplay):
             post_eval_content: Optional post-evaluation text
             post_eval_status: "none" or "verified"
             context_paths: Optional dict with "new" and "modified" path lists
+            workspace_path: Optional path to agent workspace dir (no-git mode)
 
         Returns:
             ReviewResult with approval status and selected files
@@ -2059,6 +2062,7 @@ class TextualTerminalDisplay(TerminalDisplay):
             post_eval_status=post_eval_status,
             changes=changes,
             context_paths=context_paths,
+            workspace_path=workspace_path,
         )
         # Store for re-opening from the card's "View Full Answer" button
         self._last_final_answer_modal_data = data
@@ -8965,6 +8969,18 @@ Type your question and press Enter to ask the agents.
             else:
                 prior_action = None  # No decision was made yet
 
+            # Resolve workspace_path: prefer stored data, then final workspace from logs
+            workspace_path = None
+            orchestrator = getattr(display, "orchestrator", None)
+            if orchestrator is not None:
+                try:
+                    resolve_fn = getattr(orchestrator, "_resolve_final_workspace_path", None)
+                    agent_id = card.agent_id if hasattr(card, "agent_id") else None
+                    if resolve_fn and agent_id:
+                        workspace_path = resolve_fn(agent_id)
+                except Exception:
+                    pass
+
             if stored is not None:
                 data = FinalAnswerModalData(
                     answer_content=stored.answer_content,
@@ -8976,6 +8992,7 @@ Type your question and press Enter to ask the agents.
                     changes=stored.changes,
                     context_paths=stored.context_paths,
                     prior_action=prior_action,
+                    workspace_path=stored.workspace_path or workspace_path,
                 )
             else:
                 data = FinalAnswerModalData(
@@ -8985,12 +9002,16 @@ Type your question and press Enter to ask the agents.
                     model_name=card.model_name,
                     context_paths=card.context_paths,
                     prior_action=prior_action,
+                    workspace_path=workspace_path,
                 )
             modal = FinalAnswerModal(data=data)
 
             def _on_modal_dismissed(_result=None):
                 # Update card review status if a new decision was made
-                if _result is not None and display is not None:
+                # Only set review status when there are actual changes to review;
+                # workspace-only or answer-only modals don't need a status badge.
+                has_real_changes = bool(data.changes)
+                if _result is not None and display is not None and has_real_changes:
                     # Prefer updating the card that launched the modal so the
                     # indicator is guaranteed to reflect the same decision.
                     try:

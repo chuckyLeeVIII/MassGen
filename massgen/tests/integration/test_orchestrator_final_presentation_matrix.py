@@ -601,3 +601,58 @@ async def test_review_isolated_changes_fail_policy_blocks_apply_on_drift(mock_or
     assert (repo_path / "safe.py").read_text() == "print('base-safe')\n"
     assert any("Drift conflict policy is 'fail'" in ((getattr(chunk, "error", "") or "") + (getattr(chunk, "content", "") or "")) for chunk in chunks)
     assert any("app.py" in (getattr(chunk, "content", "") or "") for chunk in chunks)
+
+
+@pytest.mark.asyncio
+async def test_show_workspace_modal_if_needed_opens_modal_without_workspace_path(
+    mock_orchestrator,
+    monkeypatch,
+):
+    """No-git final answer modal should still open even when workspace path is unavailable."""
+    orchestrator = mock_orchestrator(num_agents=1)
+    agent_id = "agent_a"
+    orchestrator._selected_agent = agent_id
+    orchestrator._final_presentation_content = "Final answer content"
+    orchestrator._isolation_manager = None
+
+    display = SimpleNamespace(
+        show_final_answer_modal=AsyncMock(return_value=ReviewResult(approved=True)),
+    )
+    orchestrator.coordination_ui = SimpleNamespace(display=display)
+
+    monkeypatch.setattr(orchestrator, "_resolve_final_workspace_path", lambda _agent_id: None)
+    orchestrator.agents[agent_id].backend.filesystem_manager = None
+
+    await orchestrator._show_workspace_modal_if_needed()
+
+    display.show_final_answer_modal.assert_awaited_once()
+    kwargs = display.show_final_answer_modal.await_args.kwargs
+    assert kwargs["changes"] == []
+    assert kwargs["answer_content"] == "Final answer content"
+    assert kwargs["agent_id"] == agent_id
+    assert kwargs["workspace_path"] is None
+
+
+@pytest.mark.asyncio
+async def test_show_workspace_modal_if_needed_opens_modal_with_empty_isolation_contexts(
+    mock_orchestrator,
+    monkeypatch,
+):
+    """Final modal should auto-open when write_mode created an isolation manager with no contexts."""
+    orchestrator = mock_orchestrator(num_agents=1)
+    agent_id = "agent_a"
+    orchestrator._selected_agent = agent_id
+    orchestrator._final_presentation_content = "Final answer content"
+    orchestrator._isolation_manager = SimpleNamespace(list_contexts=lambda: [])
+
+    display = SimpleNamespace(
+        show_final_answer_modal=AsyncMock(return_value=ReviewResult(approved=True)),
+    )
+    orchestrator.coordination_ui = SimpleNamespace(display=display)
+
+    monkeypatch.setattr(orchestrator, "_resolve_final_workspace_path", lambda _agent_id: None)
+    orchestrator.agents[agent_id].backend.filesystem_manager = None
+
+    await orchestrator._show_workspace_modal_if_needed()
+
+    display.show_final_answer_modal.assert_awaited_once()

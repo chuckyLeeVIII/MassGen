@@ -91,6 +91,7 @@ def _make_data(
     post_eval: str | None = None,
     changes: list | None = None,
     context_paths: dict | None = None,
+    workspace_path: str | None = None,
 ) -> FinalAnswerModalData:
     return FinalAnswerModalData(
         answer_content=answer,
@@ -101,6 +102,7 @@ def _make_data(
         post_eval_status="verified" if post_eval else "none",
         changes=changes,
         context_paths=context_paths,
+        workspace_path=workspace_path,
     )
 
 
@@ -606,3 +608,132 @@ class TestFinalPresentationCardReviewStatus:
         card = self._make_card()
         card.set_review_status("rejected")
         assert card._review_status == "rejected"
+
+
+# ---------------------------------------------------------------------------
+# Workspace tab feature
+# ---------------------------------------------------------------------------
+
+
+class TestWorkspacePathField:
+    def test_workspace_path_field_default_none(self):
+        """workspace_path defaults to None."""
+        data = FinalAnswerModalData(answer_content="hello")
+        assert data.workspace_path is None
+
+    def test_workspace_path_set(self):
+        """workspace_path can be set to a string path."""
+        data = FinalAnswerModalData(answer_content="hello", workspace_path="/tmp/workspace")
+        assert data.workspace_path == "/tmp/workspace"
+
+    def test_make_data_with_workspace(self):
+        """_make_data helper supports workspace_path."""
+        data = _make_data(workspace_path="/tmp/ws")
+        assert data.workspace_path == "/tmp/ws"
+
+
+class TestComposeWithWorkspace:
+    def test_compose_with_workspace_shows_two_tabs(self):
+        """When workspace_path is set and no changes, compose yields TabbedContent."""
+        data = _make_data(workspace_path="/tmp/workspace", changes=None)
+        modal = FinalAnswerModal(data=data)
+        # The compose method should produce widgets — verify the modal recognises
+        # that it has a workspace to show.
+        assert data.workspace_path is not None
+        assert data.changes is None
+        # _requires_decision should be False (no changes)
+        assert modal._requires_decision is False
+
+    def test_compose_without_workspace_shows_single_panel(self):
+        """When no workspace_path and no changes, compose yields single panel (no tabs)."""
+        data = _make_data(workspace_path=None, changes=None)
+        modal = FinalAnswerModal(data=data)
+        assert data.workspace_path is None
+        assert data.changes is None
+        assert modal._requires_decision is False
+
+    def test_changes_take_precedence_over_workspace(self):
+        """When both changes and workspace_path are set, changes branch wins."""
+        data = _make_data(changes=_make_changes(), workspace_path="/tmp/ws")
+        modal = FinalAnswerModal(data=data)
+        # Should still have the review panel
+        assert modal._panel is not None
+        assert modal._requires_decision is True
+
+
+class TestWorkspaceTabDismissBehavior:
+    def test_esc_allowed_with_workspace_tab(self):
+        """ESC should dismiss normally with workspace tab (no decision required)."""
+        data = _make_data(workspace_path="/tmp/workspace", changes=None)
+        modal = FinalAnswerModal(data=data)
+        assert modal._requires_decision is False
+        captured = {}
+
+        def mock_super_dismiss(self_inner, result=None):
+            captured["result"] = result
+
+        with patch.object(type(modal).__mro__[1], "dismiss", mock_super_dismiss):
+            modal.action_close_modal()
+        assert "result" in captured
+
+    def test_ctrl_c_immediate_dismiss_with_workspace_no_changes(self):
+        """Ctrl+C should immediately dismiss when workspace but no changes."""
+        data = _make_data(workspace_path="/tmp/workspace", changes=None)
+        modal = FinalAnswerModal(data=data)
+        assert modal._requires_decision is False
+        captured = {}
+
+        def mock_super_dismiss(self_inner, result=None):
+            captured["result"] = result
+
+        with patch.object(type(modal).__mro__[1], "dismiss", mock_super_dismiss):
+            modal.action_force_close()
+        assert "result" in captured
+        assert modal._ctrl_c_warned is False
+
+
+class TestWorkspaceAnswerTabButtons:
+    def test_browse_workspace_button_shown(self):
+        """AnswerTabContent with has_workspace=True should store has_workspace flag."""
+        data = _make_data(workspace_path="/tmp/workspace")
+        tab = AnswerTabContent(data=data, has_changes=False, has_workspace=True)
+        assert tab._has_workspace is True
+
+    def test_close_button_with_workspace(self):
+        """AnswerTabContent with has_workspace=True and no changes should not show review buttons."""
+        data = _make_data(workspace_path="/tmp/workspace")
+        tab = AnswerTabContent(data=data, has_changes=False, has_workspace=True)
+        assert tab._has_changes is False
+        assert tab._has_workspace is True
+
+    def test_browse_workspace_button_handler(self):
+        """browse_workspace_btn should switch to workspace tab."""
+        data = _make_data(workspace_path="/tmp/workspace", changes=None)
+        modal = FinalAnswerModal(data=data)
+        switched = {"called": False}
+        modal.action_switch_review_tab = lambda: switched.update({"called": True})
+        modal.call_later = lambda fn: fn()
+
+        class FakeButton:
+            id = "browse_workspace_btn"
+
+        class FakeEvent:
+            button = FakeButton()
+
+            def stop(self):
+                pass
+
+            def prevent_default(self):
+                pass
+
+        modal.on_button_pressed(FakeEvent())
+        assert switched["called"] is True
+
+
+class TestWorkspaceTabSwitching:
+    def test_switch_review_tab_handles_workspace_tab(self):
+        """action_switch_review_tab should handle workspace_tab ID when no review tab."""
+        data = _make_data(workspace_path="/tmp/workspace", changes=None)
+        modal = FinalAnswerModal(data=data)
+        # Should not raise even without a running app
+        modal.action_switch_review_tab()

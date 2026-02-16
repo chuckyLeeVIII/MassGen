@@ -8291,3 +8291,68 @@ FileEditorModal .footer-buttons {
     height: 1fr;
     padding: 0;
 }
+
+/* === Workspace Tab in Final Answer Modal === */
+#workspace_tab_split {
+    height: 1fr;
+    margin-bottom: 1;
+}
+
+#workspace_tab_file_list_container {
+    width: 35%;
+    height: 100%;
+    border: solid $primary;
+    padding: 1;
+}
+
+#workspace_tab_file_list_header {
+    color: $primary;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#workspace_tab_file_list {
+    height: 1fr;
+    background: $surface;
+}
+
+/* Higher contrast for file tree items */
+#workspace_tab_file_list .workspace-file-item {
+    color: $text;
+    padding: 0 1;
+    margin: 0;
+}
+
+#workspace_tab_file_list .workspace-file-item:hover {
+    background: $surface-lighten-2;
+}
+
+#workspace_tab_preview_container {
+    width: 65%;
+    height: 100%;
+    border: solid $primary;
+    padding: 1;
+    margin-left: 1;
+}
+
+#workspace_tab_preview_header {
+    color: $primary;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#workspace_tab_preview {
+    height: 1fr;
+    background: $surface;
+}
+
+#workspace_tab_footer {
+    height: auto;
+    min-height: 3;
+    align: center middle;
+}
+
+#open_workspace_filesystem_btn {
+    width: auto;
+    min-width: 24;
+}

@@ -519,3 +519,64 @@ class TestNotificationDebounce:
             modal._notify_decision_required()
 
         assert mock_app.notify.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Workspace tab dismiss behavior
+# ---------------------------------------------------------------------------
+
+
+class TestWorkspaceTabDismiss:
+    """Tests for dismiss behavior when workspace tab is present but no changes."""
+
+    def test_dismiss_allowed_with_workspace_no_changes(self):
+        """ESC should dismiss when workspace_path is set but no changes exist."""
+        from massgen.frontend.displays.textual.widgets.modals.final_answer_modal import (
+            FinalAnswerModal,
+            FinalAnswerModalData,
+        )
+
+        data = FinalAnswerModalData(
+            answer_content="Test answer",
+            changes=None,
+            workspace_path="/tmp/test_workspace",
+            prior_action=None,
+        )
+        modal = FinalAnswerModal(data=data)
+        assert modal._requires_decision is False
+
+        super_dismiss_called = {"called": False}
+
+        def mock_super_dismiss(self_inner, result=None):
+            super_dismiss_called["called"] = True
+
+        with patch.object(type(modal).__mro__[1], "dismiss", mock_super_dismiss):
+            modal.action_close_modal()
+
+        assert super_dismiss_called["called"]
+
+    def test_dismiss_allowed_with_workspace_empty_changes(self):
+        """ESC should dismiss when workspace_path is set and changes is empty list."""
+        from massgen.frontend.displays.textual.widgets.modals.final_answer_modal import (
+            FinalAnswerModal,
+            FinalAnswerModalData,
+        )
+
+        data = FinalAnswerModalData(
+            answer_content="Test answer",
+            changes=[],
+            workspace_path="/tmp/test_workspace",
+            prior_action=None,
+        )
+        modal = FinalAnswerModal(data=data)
+        assert modal._requires_decision is False
+
+        super_dismiss_called = {"called": False}
+
+        def mock_super_dismiss(self_inner, result=None):
+            super_dismiss_called["called"] = True
+
+        with patch.object(type(modal).__mro__[1], "dismiss", mock_super_dismiss):
+            modal.action_close_modal()
+
+        assert super_dismiss_called["called"]

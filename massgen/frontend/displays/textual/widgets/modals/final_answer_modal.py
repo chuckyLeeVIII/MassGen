@@ -9,9 +9,11 @@ answer, post-eval) and a conditional "Review Changes" tab (diff review
 panel reused from ReviewChangesPanel).
 """
 
+import os
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
 
 try:
     from textual.app import ComposeResult
@@ -42,6 +44,7 @@ class FinalAnswerModalData:
     changes: Optional[List[Dict[str, Any]]] = None  # None = no Review tab
     context_paths: Optional[Dict] = None
     prior_action: Optional[str] = None  # "approved" | "rejected" when re-opened
+    workspace_path: Optional[str] = None  # Agent workspace dir (no-git mode)
 
 
 class AnswerTabContent(Vertical):
@@ -53,12 +56,14 @@ class AnswerTabContent(Vertical):
         self,
         data: FinalAnswerModalData,
         has_changes: bool = False,
+        has_workspace: bool = False,
         prior_action: Optional[str] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self._data = data
         self._has_changes = has_changes
+        self._has_workspace = has_workspace
         self._prior_action = prior_action
 
     def compose(self) -> ComposeResult:
@@ -132,6 +137,19 @@ class AnswerTabContent(Vertical):
                         id="approve_all_answer_btn",
                         classes="answer-action-btn",
                     )
+                elif self._has_workspace:
+                    yield Button(
+                        "Browse Workspace",
+                        variant="default",
+                        id="browse_workspace_btn",
+                        classes="answer-action-btn",
+                    )
+                    yield Button(
+                        "Close",
+                        variant="primary",
+                        id="close_answer_btn",
+                        classes="answer-action-btn",
+                    )
                 else:
                     yield Button(
                         "Close",
@@ -172,6 +190,257 @@ class AnswerTabContent(Vertical):
 
         counts_str = " | ".join(f"{aid} ({count})" for aid, count in vote_counts.items())
         return f"Votes: {counts_str}"
+
+
+class WorkspaceTabContent(Vertical):
+    """Workspace browser tab: file tree + preview pane for no-git mode."""
+
+    _MAX_SCAN_FILES = 400
+    _MAX_SCAN_DEPTH = 6
+
+    def __init__(self, workspace_path: str, **kwargs):
+        super().__init__(**kwargs)
+        self._workspace_path = workspace_path
+        self._current_files: List[Dict[str, Any]] = []
+        self._tree_lines: List[tuple] = []
+        self._expanded_dirs: Set[str] = set()
+        self._dir_file_counts: Dict[str, int] = {}
+        self._load_counter: int = 0
+
+    def compose(self) -> ComposeResult:
+        with Horizontal(id="workspace_tab_split"):
+            with Container(id="workspace_tab_file_list_container"):
+                yield Label("[bold]Files[/]", id="workspace_tab_file_list_header", markup=True)
+                yield VerticalScroll(id="workspace_tab_file_list")
+            with Container(id="workspace_tab_preview_container"):
+                yield Label("[bold]Preview[/]", id="workspace_tab_preview_header", markup=True)
+                yield VerticalScroll(id="workspace_tab_preview")
+        with Horizontal(id="workspace_tab_footer"):
+            yield Button("Open in Filesystem", id="open_workspace_filesystem_btn")
+
+    def on_mount(self) -> None:
+        self._refresh_file_list()
+
+    # ------------------------------------------------------------------
+    # File scanning (reuses logic from browser_modals.WorkspaceBrowserModal)
+    # ------------------------------------------------------------------
+
+    def _scan_files(self) -> tuple:
+        from .browser_modals import _should_skip_dir
+
+        files: List[Dict[str, Any]] = []
+        truncated = False
+        workspace = self._workspace_path
+        if not workspace or not os.path.isdir(workspace):
+            return files, False
+
+        for root, dirs, filenames in os.walk(workspace, topdown=True):
+            rel_root = os.path.relpath(root, workspace)
+            depth = 0 if rel_root == "." else len(rel_root.split(os.sep))
+            dirs[:] = [d for d in dirs if not d.startswith(".") and not _should_skip_dir(d) and depth < self._MAX_SCAN_DEPTH]
+            if depth >= self._MAX_SCAN_DEPTH:
+                filenames = []
+            for fname in filenames:
+                if fname.startswith("."):
+                    continue
+                if len(files) >= self._MAX_SCAN_FILES:
+                    truncated = True
+                    break
+                full_path = os.path.join(root, fname)
+                rel_path = os.path.relpath(full_path, workspace)
+                try:
+                    stat = os.stat(full_path)
+                    files.append(
+                        {
+                            "name": fname,
+                            "rel_path": rel_path,
+                            "full_path": full_path,
+                            "size": stat.st_size,
+                            "mtime": stat.st_mtime,
+                        },
+                    )
+                except OSError:
+                    pass
+            if truncated:
+                break
+        return sorted(files, key=lambda f: f["rel_path"]), truncated
+
+    def _format_size(self, size: int) -> str:
+        if size < 1024:
+            return f"{size}B"
+        elif size < 1024 * 1024:
+            return f"{size // 1024}KB"
+        else:
+            return f"{size // (1024 * 1024)}MB"
+
+    def _build_file_tree(self, files: List[Dict[str, Any]]) -> List[tuple]:
+        dir_files: Dict[str, List[tuple]] = {}
+        root_files: List[tuple] = []
+
+        for idx, f in enumerate(files):
+            rel_path = f["rel_path"]
+            size_str = self._format_size(f["size"])
+            if "/" in rel_path or "\\" in rel_path:
+                parts = rel_path.replace("\\", "/").split("/")
+                dir_name = parts[0]
+                file_name = "/".join(parts[1:])
+                if dir_name not in dir_files:
+                    dir_files[dir_name] = []
+                dir_files[dir_name].append((file_name, size_str, idx))
+            else:
+                root_files.append((rel_path, size_str, idx))
+
+        self._dir_file_counts = {d: len(f) for d, f in dir_files.items()}
+        result = []
+
+        sorted_dirs = sorted(dir_files.keys())
+        for i, dir_name in enumerate(sorted_dirs):
+            is_last_dir = (i == len(sorted_dirs) - 1) and not root_files
+            dir_connector = "\u2514\u2500\u2500 " if is_last_dir else "\u251c\u2500\u2500 "
+            dir_file_list = dir_files[dir_name]
+            file_count = len(dir_file_list)
+
+            is_expanded = dir_name in self._expanded_dirs
+            if file_count <= 3 and dir_name not in self._expanded_dirs:
+                is_expanded = True
+                self._expanded_dirs.add(dir_name)
+
+            arrow = "\u25bc" if is_expanded else "\u25b6"
+            count_hint = f" ({file_count})" if not is_expanded else ""
+            result.append(
+                (
+                    f"[bold yellow]{dir_connector}{arrow} {dir_name}/{count_hint}[/]",
+                    f"dir:{dir_name}",
+                ),
+            )
+
+            if is_expanded:
+                for j, (file_name, size_str, file_idx) in enumerate(dir_file_list):
+                    is_last_file = j == len(dir_file_list) - 1
+                    prefix = "    " if is_last_dir else "\u2502   "
+                    file_connector = "\u2514\u2500\u2500 " if is_last_file else "\u251c\u2500\u2500 "
+                    result.append(
+                        (
+                            f"[white]{prefix}{file_connector}[/][bold cyan]{file_name}[/] [italic]{size_str}[/]",
+                            file_idx,
+                        ),
+                    )
+
+        for i, (file_name, size_str, file_idx) in enumerate(root_files):
+            is_last = i == len(root_files) - 1
+            connector = "\u2514\u2500\u2500 " if is_last else "\u251c\u2500\u2500 "
+            result.append((f"[white]{connector}[/][bold cyan]{file_name}[/] [italic]{size_str}[/]", file_idx))
+
+        return result
+
+    def _preview_file(self, file_idx: int) -> None:
+        from .browser_modals import render_file_preview
+
+        try:
+            preview = self.query_one("#workspace_tab_preview", VerticalScroll)
+        except Exception:
+            return
+        preview.remove_children()
+
+        if file_idx < 0 or file_idx >= len(self._current_files):
+            preview.mount(Static("[italic]Select a file to preview[/]", markup=True))
+            return
+
+        f = self._current_files[file_idx]
+        full_path = Path(f["full_path"])
+        header = Static(
+            f"[bold cyan]{f['rel_path']}[/]\n[white]{'\u2500' * 40}[/]",
+            markup=True,
+        )
+        preview.mount(header)
+
+        renderable, is_rich = render_file_preview(full_path)
+        if is_rich:
+            preview.mount(Static(renderable))
+        else:
+            preview.mount(Static(str(renderable), markup=True))
+
+    def _refresh_file_list(self) -> None:
+        try:
+            file_list = self.query_one("#workspace_tab_file_list", VerticalScroll)
+        except Exception:
+            return
+        file_list.remove_children()
+        self._load_counter += 1
+
+        files, truncated = self._scan_files()
+        self._current_files = files
+
+        if not files:
+            file_list.mount(Static("[italic]Workspace is empty[/]", markup=True))
+            return
+
+        self._tree_lines = self._build_file_tree(files)
+        for idx, (display_text, _item_data) in enumerate(self._tree_lines):
+            file_list.mount(
+                Static(
+                    display_text,
+                    id=f"ws_tab_file_{self._load_counter}_{idx}",
+                    classes="workspace-file-item",
+                    markup=True,
+                ),
+            )
+
+        if truncated:
+            file_list.mount(
+                Static(
+                    f"[dim]... showing first {self._MAX_SCAN_FILES} files[/]",
+                    markup=True,
+                ),
+            )
+
+    def _toggle_directory(self, dir_name: str) -> None:
+        if dir_name in self._expanded_dirs:
+            self._expanded_dirs.remove(dir_name)
+        else:
+            self._expanded_dirs.add(dir_name)
+        self._refresh_file_list()
+
+    def on_click(self, event) -> None:
+        if hasattr(event, "widget") and event.widget:
+            widget_id = getattr(event.widget, "id", "")
+            if widget_id and widget_id.startswith("ws_tab_file_"):
+                try:
+                    tree_idx = int(widget_id.split("_")[-1])
+                    if self._tree_lines and 0 <= tree_idx < len(self._tree_lines):
+                        item_data = self._tree_lines[tree_idx][1]
+                        if isinstance(item_data, str) and item_data.startswith("dir:"):
+                            self._toggle_directory(item_data[4:])
+                            return
+                        if item_data == -1:
+                            return
+                        self._preview_file(item_data)
+                except (ValueError, IndexError):
+                    pass
+
+    def _open_in_filesystem(self) -> None:
+        import platform
+        import subprocess
+
+        if not self._workspace_path or not os.path.isdir(self._workspace_path):
+            try:
+                self.app.notify("No workspace available", severity="warning", timeout=2)
+            except Exception:
+                pass
+            return
+        try:
+            system = platform.system()
+            if system == "Darwin":
+                subprocess.run(["open", str(self._workspace_path)])
+            elif system == "Windows":
+                subprocess.run(["explorer", str(self._workspace_path)])
+            else:
+                subprocess.run(["xdg-open", str(self._workspace_path)])
+        except Exception as e:
+            try:
+                self.app.notify(f"Error opening workspace: {e}", severity="error", timeout=3)
+            except Exception:
+                pass
 
 
 class FinalAnswerModal(BaseModal):
@@ -268,6 +537,7 @@ class FinalAnswerModal(BaseModal):
 
     def compose(self) -> ComposeResult:
         has_changes = bool(self._data.changes)
+        has_workspace = bool(self._data.workspace_path) and not has_changes
 
         with Container(
             id="final_answer_modal_container",
@@ -297,6 +567,21 @@ class FinalAnswerModal(BaseModal):
                             )
                         if self._panel:
                             yield self._panel
+            elif has_workspace:
+                with TabbedContent(id="final_answer_tabs", initial="answer_tab"):
+                    with TabPane("Answer [1]", id="answer_tab"):
+                        yield AnswerTabContent(
+                            data=self._data,
+                            has_changes=False,
+                            has_workspace=True,
+                            prior_action=self._prior_action,
+                            id="answer_content",
+                        )
+                    with TabPane("Workspace [2]", id="workspace_tab"):
+                        yield WorkspaceTabContent(
+                            workspace_path=self._data.workspace_path,
+                            id="workspace_content",
+                        )
             else:
                 yield AnswerTabContent(
                     data=self._data,
@@ -320,6 +605,17 @@ class FinalAnswerModal(BaseModal):
             event.stop()
             event.prevent_default()
             self.call_later(self.action_switch_review_tab)
+        elif event.button.id == "browse_workspace_btn":
+            event.stop()
+            event.prevent_default()
+            self.call_later(self.action_switch_review_tab)
+        elif event.button.id == "open_workspace_filesystem_btn":
+            event.stop()
+            try:
+                ws = self.query_one("#workspace_content", WorkspaceTabContent)
+                ws._open_in_filesystem()
+            except Exception:
+                pass
         elif event.button.id == "close_modal_button":
             # Handle X button explicitly and stop the event so BaseModal's
             # handler doesn't also fire (Textual dispatches to each MRO class).
@@ -410,14 +706,19 @@ class FinalAnswerModal(BaseModal):
             pass  # No tabs in answer-only mode
 
     def action_switch_review_tab(self) -> None:
-        """Switch to Review Changes tab via keyboard shortcut or button."""
+        """Switch to Review Changes or Workspace tab via keyboard shortcut or button."""
         try:
             tabs = self.query_one("#final_answer_tabs", TabbedContent)
             # Clear focus first — TabbedContent auto-activates the pane
             # containing the focused widget, so leaving focus on a button
             # inside answer_tab would immediately revert the switch.
             self.set_focus(None)
-            tabs.active = "review_tab"
+            # Try review_tab first (changes mode), then workspace_tab (workspace mode)
+            try:
+                tabs.query_one("#review_tab", TabPane)
+                tabs.active = "review_tab"
+            except Exception:
+                tabs.active = "workspace_tab"
         except Exception:
             pass  # No tabs in answer-only mode
 
@@ -511,4 +812,5 @@ __all__ = [
     "FinalAnswerModal",
     "FinalAnswerModalData",
     "AnswerTabContent",
+    "WorkspaceTabContent",
 ]
