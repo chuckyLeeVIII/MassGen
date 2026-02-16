@@ -349,7 +349,7 @@ class WorkspaceTabContent(Vertical):
         f = self._current_files[file_idx]
         full_path = Path(f["full_path"])
         header = Static(
-            f"[bold cyan]{f['rel_path']}[/]\n[white]{'\u2500' * 40}[/]",
+            f"[bold cyan]{f['rel_path']}[/]\n[white]{'─' * 40}[/]",
             markup=True,
         )
         preview.mount(header)
