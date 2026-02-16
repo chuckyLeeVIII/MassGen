@@ -360,6 +360,14 @@ def evaluate_checklist_submission(
                 if structural_items:
                     items_str = ", ".join(structural_items)
                     explanation += f"Your own analysis identified these structural changes: {items_str}. " f"Implement ALL of them. "
+                # Require task plan logging so commitments can be verified
+                transformative_items + structural_items
+                explanation += (
+                    "BEFORE starting work, add each committed item above to your task plan "
+                    "as a separate task. Check off each task only after it is fully "
+                    "implemented and verifiable in the output. Do not substitute easier "
+                    "work — deliver exactly what you committed to. "
+                )
 
             # T4-specific ambition/craft guidance: when ambition fails, give the agent
             # concrete direction instead of just listing T4 as a failed item.

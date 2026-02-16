@@ -797,6 +797,12 @@ multiple structural weaknesses, address them all in this round. Do not pick the
 single easiest improvement, implement it, and stop. Each round is expensive — make
 it count by delivering the full scope of improvements you identified.
 
+**Log committed items in your task plan.** Before starting work, add each
+structural and transformative improvement you identified to your task plan as a
+separate task. Check off each task only after it is fully implemented and
+verifiable in the output. Do not substitute easier work — deliver exactly what
+you committed to.
+
 **Verify existing features before adding new ones.** After making changes, confirm that
 features from prior rounds still work. Adding a feature that breaks existing functionality
 is regression, not improvement. A working output with fewer features is always better than

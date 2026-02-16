@@ -10681,6 +10681,9 @@ INSTRUCTIONS FOR NEXT ATTEMPT:
                 if ctx_path:
                     isolation_manager.move_scratch_to_workspace(ctx_path)
             isolation_manager.cleanup_session()
+            # Contexts are now cleaned up; if this was a write-mode run with no
+            # isolated diffs, still open the final answer/workspace modal.
+            await self._show_workspace_modal_if_needed()
             return
 
         # 3. Yield status chunk to inform user about review phase

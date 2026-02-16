@@ -896,6 +896,89 @@ class TestChecklistRequiredTrue:
         assert _checklist_required_true(70, num_items=3) >= 2  # floor = max(1, (3+1)//2) = 2
 
 
+class TestTaskPlanCommitmentTracking:
+    """Tests for task plan commitment tracking in iterate verdicts."""
+
+    def test_iterate_verdict_instructs_task_plan_logging(self):
+        """When iterating with structural items, verdict must instruct agent to log them as tasks."""
+        items = ["Check 1", "Check 2", "Check 3", "Check 4"]
+        state = {
+            "terminate_action": "vote",
+            "iterate_action": "new_answer",
+            "has_existing_answers": True,
+            "required": 4,
+            "cutoff": 70,
+            "require_substantiveness": True,
+        }
+        result = evaluate_checklist_submission(
+            scores={
+                "T1": {"score": 60, "reasoning": "gaps"},
+                "T2": {"score": 55, "reasoning": "weak"},
+                "T3": {"score": 70, "reasoning": "ok"},
+                "T4": {"score": 50, "reasoning": "shallow"},
+            },
+            improvements="Various improvements needed",
+            report_path="",
+            items=items,
+            state=state,
+            substantiveness={
+                "transformative": [],
+                "structural": ["add interactive timeline", "redesign navigation"],
+                "incremental": ["fix typos"],
+                "decision_space_exhausted": False,
+            },
+        )
+        assert result["verdict"] == "new_answer"
+        explanation = result["explanation"].lower()
+        # Must instruct the agent to log committed items in its task plan
+        assert "task plan" in explanation or "task list" in explanation
+
+    def test_iterate_verdict_no_task_plan_when_no_items(self):
+        """When iterating with legacy count format (no item lists), no task plan instruction."""
+        items = ["Check 1", "Check 2", "Check 3", "Check 4"]
+        state = {
+            "terminate_action": "vote",
+            "iterate_action": "new_answer",
+            "has_existing_answers": True,
+            "required": 4,
+            "cutoff": 70,
+            "require_substantiveness": True,
+        }
+        result = evaluate_checklist_submission(
+            scores={
+                "T1": {"score": 60, "reasoning": "gaps"},
+                "T2": {"score": 55, "reasoning": "weak"},
+                "T3": {"score": 70, "reasoning": "ok"},
+                "T4": {"score": 50, "reasoning": "shallow"},
+            },
+            improvements="Various improvements needed",
+            report_path="",
+            items=items,
+            state=state,
+            substantiveness={
+                "transformative_count": 0,
+                "structural_count": 2,
+                "incremental_count": 1,
+                "decision_space_exhausted": False,
+            },
+        )
+        assert result["verdict"] == "new_answer"
+        # Legacy format has no specific items to track — no task plan instruction
+        explanation = result["explanation"].lower()
+        assert "task plan" not in explanation and "task list" not in explanation
+
+    def test_system_prompt_iterate_guidance_mentions_task_plan(self):
+        """System prompt iterate guidance must mention logging committed items as tasks."""
+        from massgen.system_prompt_sections import (
+            _CHECKLIST_ITEMS_CHANGEDOC,
+            _build_checklist_gated_decision,
+        )
+
+        decision = _build_checklist_gated_decision(_CHECKLIST_ITEMS_CHANGEDOC)
+        lower = decision.lower()
+        assert "task plan" in lower or "task list" in lower
+
+
 class TestBuildServerConfig:
     """Tests for build_server_config utility."""
 

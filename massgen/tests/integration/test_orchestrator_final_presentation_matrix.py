@@ -659,6 +659,60 @@ async def test_show_workspace_modal_if_needed_opens_modal_with_empty_isolation_c
 
 
 @pytest.mark.asyncio
+async def test_review_isolated_changes_no_changes_opens_workspace_modal(
+    mock_orchestrator,
+    tmp_path,
+    monkeypatch,
+):
+    """When isolation has no diffs, still open final answer modal with workspace tab."""
+    orchestrator = mock_orchestrator(num_agents=1)
+    agent_id = "agent_a"
+    agent = orchestrator.agents[agent_id]
+    orchestrator._selected_agent = agent_id
+    orchestrator._final_presentation_content = "Final answer content"
+
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    _init_git_repo(repo_path, {"app.py": "print('v1')\n"})
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    isolation_manager = IsolationContextManager(
+        session_id="test-no-changes-modal",
+        write_mode="worktree",
+        workspace_path=str(workspace),
+    )
+    isolation_manager.initialize_context(str(repo_path), agent_id=agent_id)
+
+    # Mirror runtime wiring: _show_workspace_modal_if_needed checks self._isolation_manager
+    orchestrator._isolation_manager = isolation_manager
+
+    display = SimpleNamespace(
+        show_final_answer_modal=AsyncMock(return_value=ReviewResult(approved=True)),
+    )
+    orchestrator.coordination_ui = SimpleNamespace(display=display)
+
+    monkeypatch.setattr(orchestrator, "_resolve_final_workspace_path", lambda _agent_id: None)
+    agent.backend.filesystem_manager = None
+
+    chunks = await _collect_chunks(
+        orchestrator._review_isolated_changes(
+            agent=agent,
+            isolation_manager=isolation_manager,
+            selected_agent_id=agent_id,
+        ),
+    )
+
+    assert chunks == []
+    display.show_final_answer_modal.assert_awaited_once()
+    kwargs = display.show_final_answer_modal.await_args.kwargs
+    assert kwargs["changes"] == []
+    assert kwargs["answer_content"] == "Final answer content"
+    assert kwargs["agent_id"] == agent_id
+
+
+@pytest.mark.asyncio
 async def test_review_isolated_changes_rework_preserves_isolation(mock_orchestrator, tmp_path):
     """Rework ReviewResult preserves isolation and sets _pending_review_rework signal."""
     orchestrator = mock_orchestrator(num_agents=1)
