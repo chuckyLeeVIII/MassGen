@@ -6,6 +6,7 @@ Tests Task and TaskPlan dataclasses, dependency management,
 and all MCP server operations.
 """
 
+import sys
 from datetime import datetime
 
 import pytest
@@ -73,7 +74,7 @@ class TestTaskPlan:
 
     def test_plan_creation(self):
         """Test basic plan creation."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
 
         assert plan.agent_id == "agent_1"
         assert len(plan.tasks) == 0
@@ -82,7 +83,7 @@ class TestTaskPlan:
 
     def test_add_task_simple(self):
         """Test adding a simple task."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
         task = plan.add_task("Task 1")
 
         assert len(plan.tasks) == 1
@@ -91,7 +92,7 @@ class TestTaskPlan:
 
     def test_add_task_with_dependencies(self):
         """Test adding tasks with dependencies."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
 
         plan.add_task("Task 1", task_id="task_1")
         task2 = plan.add_task("Task 2", task_id="task_2", depends_on=["task_1"])
@@ -101,14 +102,14 @@ class TestTaskPlan:
 
     def test_add_task_invalid_dependency(self):
         """Test that adding task with invalid dependency raises error."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
 
         with pytest.raises(ValueError, match="Dependency task does not exist"):
             plan.add_task("Task 1", depends_on=["nonexistent"])
 
     def test_add_task_duplicate_id(self):
         """Test that adding task with duplicate ID raises error."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
         plan.add_task("Task 1", task_id="task_1")
 
         with pytest.raises(ValueError, match="Task ID already exists"):
@@ -116,7 +117,7 @@ class TestTaskPlan:
 
     def test_get_task(self):
         """Test getting a task by ID."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
         plan.add_task("Task 1", task_id="task_1")
 
         retrieved = plan.get_task("task_1")
@@ -129,14 +130,14 @@ class TestTaskPlan:
 
     def test_can_start_task_no_dependencies(self):
         """Test can_start_task for task with no dependencies."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
         plan.add_task("Task 1", task_id="task_1")
 
         assert plan.can_start_task("task_1") is True
 
     def test_can_start_task_with_completed_dependencies(self):
         """Test can_start_task when dependencies are completed."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
         task1 = plan.add_task("Task 1", task_id="task_1")
         plan.add_task("Task 2", task_id="task_2", depends_on=["task_1"])
 
@@ -149,7 +150,7 @@ class TestTaskPlan:
 
     def test_can_start_task_with_incomplete_dependencies(self):
         """Test can_start_task when dependencies are incomplete."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
         task1 = plan.add_task("Task 1", task_id="task_1")
         plan.add_task("Task 2", task_id="task_2", depends_on=["task_1"])
 
@@ -162,7 +163,7 @@ class TestTaskPlan:
 
     def test_get_ready_tasks(self):
         """Test getting ready tasks."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
         task1 = plan.add_task("Task 1", task_id="task_1")
         task2 = plan.add_task("Task 2", task_id="task_2", depends_on=["task_1"])
         task3 = plan.add_task("Task 3", task_id="task_3")
@@ -186,7 +187,7 @@ class TestTaskPlan:
 
     def test_get_blocked_tasks(self):
         """Test getting blocked tasks."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
         task1 = plan.add_task("Task 1", task_id="task_1")
         plan.add_task("Task 2", task_id="task_2", depends_on=["task_1"])
         plan.add_task("Task 3", task_id="task_3")
@@ -203,7 +204,7 @@ class TestTaskPlan:
 
     def test_get_blocking_tasks(self):
         """Test getting list of tasks blocking a task."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
         task1 = plan.add_task("Task 1", task_id="task_1")
         task2 = plan.add_task("Task 2", task_id="task_2")
         plan.add_task("Task 3", task_id="task_3", depends_on=["task_1", "task_2"])
@@ -224,7 +225,7 @@ class TestTaskPlan:
 
     def test_update_task_status(self):
         """Test updating task status."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
         task = plan.add_task("Task 1", task_id="task_1")
 
         result = plan.update_task_status("task_1", "in_progress")
@@ -233,7 +234,7 @@ class TestTaskPlan:
 
     def test_update_task_status_to_completed(self):
         """Test updating task status to completed."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
         task = plan.add_task("Task 1", task_id="task_1")
 
         plan.update_task_status("task_1", "completed")
@@ -242,7 +243,7 @@ class TestTaskPlan:
 
     def test_update_task_status_unblocks_dependent_tasks(self):
         """Test that completing a task identifies newly ready tasks."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
         plan.add_task("Task 1", task_id="task_1")
         plan.add_task("Task 2", task_id="task_2", depends_on=["task_1"])
 
@@ -254,14 +255,14 @@ class TestTaskPlan:
 
     def test_update_task_status_nonexistent_task(self):
         """Test updating nonexistent task raises error."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
 
         with pytest.raises(ValueError, match="Task not found"):
             plan.update_task_status("nonexistent", "completed")
 
     def test_edit_task(self):
         """Test editing task description."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
         task = plan.add_task("Old description", task_id="task_1")
 
         updated = plan.edit_task("task_1", "New description")
@@ -270,14 +271,14 @@ class TestTaskPlan:
 
     def test_edit_task_nonexistent(self):
         """Test editing nonexistent task raises error."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
 
         with pytest.raises(ValueError, match="Task not found"):
             plan.edit_task("nonexistent", "New description")
 
     def test_delete_task(self):
         """Test deleting a task."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
         plan.add_task("Task 1", task_id="task_1")
 
         plan.delete_task("task_1")
@@ -286,7 +287,7 @@ class TestTaskPlan:
 
     def test_delete_task_with_dependents(self):
         """Test that deleting a task with dependents raises error."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
         plan.add_task("Task 1", task_id="task_1")
         plan.add_task("Task 2", task_id="task_2", depends_on=["task_1"])
 
@@ -295,14 +296,14 @@ class TestTaskPlan:
 
     def test_delete_task_nonexistent(self):
         """Test deleting nonexistent task raises error."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
 
         with pytest.raises(ValueError, match="Task not found"):
             plan.delete_task("nonexistent")
 
     def test_validate_dependencies_simple(self):
         """Test validating simple dependencies."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
 
         task_list = [
             {"id": "task_1", "description": "Task 1"},
@@ -314,7 +315,7 @@ class TestTaskPlan:
 
     def test_validate_dependencies_index_based(self):
         """Test validating index-based dependencies."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
 
         task_list = [
             "Task 1",
@@ -326,7 +327,7 @@ class TestTaskPlan:
 
     def test_validate_dependencies_invalid_index(self):
         """Test that invalid index raises error."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
 
         task_list = [
             "Task 1",
@@ -338,7 +339,7 @@ class TestTaskPlan:
 
     def test_validate_dependencies_forward_reference(self):
         """Test that forward reference raises error."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
 
         task_list = [
             {"description": "Task 1", "depends_on": [1]},
@@ -350,7 +351,7 @@ class TestTaskPlan:
 
     def test_validate_dependencies_self_reference(self):
         """Test that self-reference raises error."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
 
         task_list = [
             {"id": "task_1", "description": "Task 1", "depends_on": ["task_1"]},
@@ -361,7 +362,7 @@ class TestTaskPlan:
 
     def test_validate_dependencies_nonexistent_id(self):
         """Test that nonexistent dependency ID raises error."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
 
         task_list = [
             {"id": "task_1", "description": "Task 1", "depends_on": ["nonexistent"]},
@@ -372,7 +373,7 @@ class TestTaskPlan:
 
     def test_circular_dependency_detection(self):
         """Test circular dependency detection."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
 
         # Create tasks that would form a cycle
         plan.add_task("Task 1", task_id="task_1")
@@ -393,7 +394,7 @@ class TestTaskPlan:
         # This is done by trying to add a task with circular dependency
         with pytest.raises(ValueError):
             # Manually create circular dependency in new plan to test detection
-            plan2 = TaskPlan(agent_id="agent_2")
+            plan2 = TaskPlan(agent_id="agent_2", require_verification=False)
             t1 = plan2.add_task("T1", task_id="t1")
             plan2.add_task("T2", task_id="t2", depends_on=["t1"])
             # Manually modify to create cycle
@@ -403,7 +404,7 @@ class TestTaskPlan:
 
     def test_plan_serialization(self):
         """Test plan to_dict and from_dict."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
         plan.add_task("Task 1", task_id="task_1")
         plan.add_task("Task 2", task_id="task_2", depends_on=["task_1"])
 
@@ -426,7 +427,7 @@ class TestTaskPlanComplexScenarios:
 
     def test_parallel_tasks(self):
         """Test identifying parallel tasks."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
 
         # Two independent research tasks
         plan.add_task("Research OAuth", task_id="research_oauth")
@@ -467,7 +468,7 @@ class TestTaskPlanComplexScenarios:
 
     def test_diamond_dependency(self):
         """Test diamond dependency pattern."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
 
         # Diamond pattern: A -> B, A -> C, B -> D, C -> D
         plan.add_task("Task A", task_id="a")
@@ -496,7 +497,7 @@ class TestTaskPlanComplexScenarios:
 
     def test_long_chain(self):
         """Test long dependency chain."""
-        plan = TaskPlan(agent_id="agent_1")
+        plan = TaskPlan(agent_id="agent_1", require_verification=False)
 
         # Create chain: task1 -> task2 -> task3 -> task4 -> task5
         prev_id = None
@@ -525,6 +526,41 @@ class TestTaskPlanComplexScenarios:
 
 class TestMCPServerIntegration:
     """Test MCP server tool functions (integration with dataclasses)."""
+
+    @pytest.mark.asyncio
+    async def test_create_task_plan_schema_uses_object_tasks(self, monkeypatch):
+        """Tool schema should not advertise legacy string task payloads."""
+        from massgen.mcp_tools.planning import _planning_mcp_server as server
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["planning-server", "--agent-id", "agent_a", "--orchestrator-id", "orch_1"],
+        )
+        mcp = await server.create_server()
+        tools = await mcp.get_tools()
+        schema = tools["create_task_plan"].parameters
+
+        task_items = schema["properties"]["tasks"]["items"]
+        assert task_items.get("type") == "object"
+        assert "anyOf" not in task_items
+
+    @pytest.mark.asyncio
+    async def test_create_task_plan_description_requires_verification(self, monkeypatch):
+        """Tool description should make verification requirement explicit."""
+        from massgen.mcp_tools.planning import _planning_mcp_server as server
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["planning-server", "--agent-id", "agent_a", "--orchestrator-id", "orch_1"],
+        )
+        mcp = await server.create_server()
+        tools = await mcp.get_tools()
+        description = tools["create_task_plan"].description.lower()
+
+        assert "simple strings" not in description
+        assert "verification" in description
 
     def test_create_task_plan_simple(self):
         """Test creating a simple task plan via MCP."""
@@ -628,12 +664,12 @@ class TestVerificationEnforcement:
     def _make_plan_with_verification_task(self):
         """Helper: create a plan with a task that has verification metadata."""
         plan = TaskPlan(agent_id="test_agent")
-        task = plan.add_task(
+        plan.add_task(
             description="Build the API endpoint",
             task_id="build_api",
+            verification="Endpoint responds 200 with correct payload",
+            verification_method="curl localhost:8000/api and check response JSON",
         )
-        task.metadata["verification"] = "Endpoint responds 200 with correct payload"
-        task.metadata["verification_method"] = "curl localhost:8000/api and check response JSON"
         return plan
 
     def test_completion_response_includes_verification_reminder(self):
@@ -654,7 +690,7 @@ class TestVerificationEnforcement:
     def test_completion_response_no_verification_when_no_criteria(self):
         """When marking a task 'completed' that has NO verification criteria,
         response should NOT include verification_pending."""
-        plan = TaskPlan(agent_id="test_agent")
+        plan = TaskPlan(agent_id="test_agent", require_verification=False)
         plan.add_task(description="Simple task", task_id="simple")
         plan.update_task_status("simple", "in_progress")
         result = plan.update_task_status("simple", "completed", "Done")
@@ -677,14 +713,20 @@ class TestVerificationEnforcement:
         plan = TaskPlan(agent_id="test_agent")
 
         # Task with verification
-        t1 = plan.add_task(description="Task A", task_id="a")
-        t1.metadata["verification"] = "A works"
-        t1.metadata["verification_method"] = "Test A"
+        plan.add_task(
+            description="Task A",
+            task_id="a",
+            verification="A works",
+            verification_method="Test A",
+        )
 
         # Another task with verification
-        t2 = plan.add_task(description="Task B", task_id="b")
-        t2.metadata["verification"] = "B works"
-        t2.metadata["verification_method"] = "Test B"
+        plan.add_task(
+            description="Task B",
+            task_id="b",
+            verification="B works",
+            verification_method="Test B",
+        )
 
         # Complete both
         plan.update_task_status("a", "in_progress")
@@ -728,9 +770,21 @@ class TestVerificationEnforcement:
         )
         assert task.metadata["verification"] == "Endpoint returns 200"
 
-    def test_add_task_no_requirement_by_default(self):
-        """By default (require_verification=False), tasks without verification are fine."""
+    def test_add_task_requires_verification_by_default(self):
+        """By default (require_verification=True), tasks without verification are rejected."""
         plan = TaskPlan(agent_id="test_agent")
+        with pytest.raises(ValueError, match="verification"):
+            plan.add_task(description="Simple task", task_id="simple")
+
+    def test_add_task_skip_verification_bypasses_requirement(self):
+        """skip_verification=True bypasses the requirement (for framework tasks)."""
+        plan = TaskPlan(agent_id="test_agent", require_verification=True)
+        task = plan.add_task(description="Framework task", task_id="framework_1", skip_verification=True)
+        assert task.id == "framework_1"
+
+    def test_add_task_opt_out_require_verification(self):
+        """When require_verification=False, tasks without verification are fine."""
+        plan = TaskPlan(agent_id="test_agent", require_verification=False)
         task = plan.add_task(description="Simple task", task_id="simple")
         assert task.id == "simple"
 
@@ -752,3 +806,13 @@ class TestVerificationEnforcement:
         content = section.build_content()
         # Should show some symbol for unverified completion distinct from verified
         assert "unverified" in content.lower() or "◐" in content or "⬡" in content
+
+    def test_system_prompt_add_task_guidance_requires_verification(self):
+        """Task planning guidance should not describe verification as optional."""
+        from massgen.system_prompt_sections import TaskPlanningSection
+
+        section = TaskPlanningSection(filesystem_mode=False)
+        content = section.build_content().lower()
+
+        assert "optional verification criteria" not in content
+        assert "verification criteria" in content

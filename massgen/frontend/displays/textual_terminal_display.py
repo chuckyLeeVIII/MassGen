@@ -78,6 +78,8 @@ try:
         AnalysisSkillLifecycleChanged,
         AnalysisTargetChanged,
         AnalysisTargetTypeChanged,
+        BackgroundTasksClicked,
+        BackgroundTasksModal,
         BroadcastModeChanged,
         CompletionFooter,
         ContextPathsClicked,
@@ -2440,6 +2442,9 @@ if TEXTUAL_AVAILABLE:
     class StatusBarContextClicked(Message):
         """Message emitted when the context paths indicator in StatusBar is clicked."""
 
+    class StatusBarToolsClicked(Message):
+        """Message emitted when the running/background tools indicator is clicked."""
+
     class StatusBar(Widget):
         """Persistent status bar showing orchestration state at the bottom of the TUI."""
 
@@ -2491,7 +2496,7 @@ if TEXTUAL_AVAILABLE:
             yield Static("⏳ Idle", id="status_phase")
             yield Static("", id="status_activity", classes="activity-indicator hidden")  # Pulsing activity indicator
             yield Static("", id="status_progress")  # Progress summary: "3 agents | 2 answers | 4/6 votes"
-            yield Static("", id="status_tools", classes="hidden")  # Running tools counter: "🔧 3 running"
+            yield Static("", id="status_tools", classes="hidden clickable")
             yield Static("", id="status_votes")
             # Spacer to push right-side elements to the edge
             yield Static("", id="status_spacer")
@@ -2519,6 +2524,8 @@ if TEXTUAL_AVAILABLE:
                     self.post_message(StatusBarEventsClicked())
                 elif widget.id == "status_cancel":
                     self.post_message(StatusBarCancelClicked())
+                elif widget.id == "status_tools":
+                    self.post_message(StatusBarToolsClicked())
                 elif widget.id == "status_cwd":
                     self.toggle_cwd_auto_include()
                 elif widget.id == "status_theme":
@@ -2604,12 +2611,15 @@ if TEXTUAL_AVAILABLE:
             except Exception as e:
                 tui_log(f"[TextualDisplay] {e}")  # Widget not mounted yet
 
-        def update_running_tools(self, count: int) -> None:
-            """Update running tools counter in status bar."""
+        def update_running_tools(self, count: int, background_count: int = 0) -> None:
+            """Update running/background tools counter in status bar."""
             try:
                 tools_widget = self.query_one("#status_tools", Static)
                 if count > 0:
-                    tools_widget.update(f"🔧 {count} running")
+                    parts = [f"🔧 {count} running"]
+                    if background_count > 0:
+                        parts.append(f"⚙️ {background_count} bg")
+                    tools_widget.update(" | ".join(parts))
                     tools_widget.remove_class("hidden")
                 else:
                     tools_widget.update("")
@@ -3121,6 +3131,7 @@ if TEXTUAL_AVAILABLE:
             Binding("ctrl+p", "toggle_cwd", "Toggle CWD", priority=True, show=False),
             # Subagent quick access
             Binding("ctrl+u", "show_subagents", "Subagents", priority=True, show=False),
+            Binding("b", "open_background_tools", "Background Jobs", show=False),
             # Help - Ctrl+G for guide/help
             Binding("ctrl+g", "show_help", "Help", priority=True, show=False),
             # Mode toggles
@@ -3356,6 +3367,9 @@ if TEXTUAL_AVAILABLE:
                     self._tab_bar.set_agent_personas({})
                 else:
                     self._tab_bar.set_agent_subtasks({})
+
+            # Ensure status-bar tool indicators reset between turns.
+            self._update_running_tools_count()
 
         _BACKEND_PROVIDER_SLUGS: Dict[str, str] = {
             "openai": "openai",
@@ -3702,6 +3716,7 @@ if TEXTUAL_AVAILABLE:
                 self._mode_bar.set_parallel_personas_enabled(self._mode_state.parallel_personas_enabled, self._mode_state.persona_diversity_mode)
             self._refresh_skills_button_state()
             self._refresh_input_modes_row_layout()
+            self._update_running_tools_count()
             # Re-run once after the first layout pass so width-dependent hint
             # truncation can use settled regions.
             self.call_after_refresh(lambda: (self._refresh_welcome_context_hint(), self._refresh_input_modes_row_layout()))
@@ -8940,6 +8955,20 @@ Type your question and press Enter to ask the agents.
                     self.push_screen(modal)
             event.stop()
 
+        def on_background_tasks_clicked(self, event: BackgroundTasksClicked) -> None:
+            """Handle background tasks label click in ribbon."""
+            background_tasks = self._collect_background_tools_for_agent(event.agent_id)
+            if background_tasks:
+                self._show_modal_async(
+                    BackgroundTasksModal(
+                        background_tasks,
+                        agent_id=event.agent_id,
+                    ),
+                )
+            else:
+                self.notify("No background jobs running", severity="warning", timeout=3)
+            event.stop()
+
         def on_context_paths_clicked(self, event: ContextPathsClicked) -> None:
             """Handle context paths icon click in ribbon - open context paths modal."""
             self._show_context_modal()
@@ -9189,6 +9218,95 @@ Type your question and press Enter to ask the agents.
                 self._show_agent_output_modal(agent_id)
             else:
                 self.notify("No agent selected", severity="warning")
+
+        def _collect_background_tools(self) -> List[Dict[str, Any]]:
+            """Collect background jobs across all agent panels."""
+            tasks: List[Dict[str, Any]] = []
+            for agent_id, panel in self.agent_widgets.items():
+                get_tools = getattr(panel, "_get_background_tools", None)
+                if not callable(get_tools):
+                    continue
+                try:
+                    panel_tasks = get_tools() or []
+                except Exception as e:
+                    tui_log(f"[TextualDisplay] {e}")
+                    continue
+                for task in panel_tasks:
+                    if not isinstance(task, dict):
+                        continue
+                    merged_task = dict(task)
+                    merged_task.setdefault("agent_id", agent_id)
+                    tasks.append(merged_task)
+            return tasks
+
+        def _collect_background_tools_for_agent(self, agent_id: str) -> List[Dict[str, Any]]:
+            """Collect background jobs from a single agent panel."""
+            panel = self.agent_widgets.get(agent_id)
+            if panel is None:
+                return []
+
+            get_tools = getattr(panel, "_get_background_tools", None)
+            if not callable(get_tools):
+                return []
+
+            try:
+                panel_tasks = get_tools() or []
+            except Exception as e:
+                tui_log(f"[TextualDisplay] {e}")
+                return []
+
+            tasks: List[Dict[str, Any]] = []
+            for task in panel_tasks:
+                if not isinstance(task, dict):
+                    continue
+                merged_task = dict(task)
+                merged_task.setdefault("agent_id", agent_id)
+                tasks.append(merged_task)
+            return tasks
+
+        def _update_running_tools_count(self) -> None:
+            """Refresh status-bar tool counters across all agent panels."""
+            if not self._status_bar and not self._status_ribbon:
+                return
+
+            running_count = 0
+            background_count = 0
+            per_agent_background: Dict[str, int] = {}
+
+            for agent_id, panel in self.agent_widgets.items():
+                get_running = getattr(panel, "_get_running_tools_count", None)
+                if callable(get_running):
+                    try:
+                        running_count += int(get_running())
+                    except Exception as e:
+                        tui_log(f"[TextualDisplay] {e}")
+
+                agent_background_count = 0
+                get_background = getattr(panel, "_get_background_tools", None)
+                if callable(get_background):
+                    try:
+                        agent_background_count = len(get_background() or [])
+                        background_count += agent_background_count
+                    except Exception as e:
+                        tui_log(f"[TextualDisplay] {e}")
+                per_agent_background[agent_id] = agent_background_count
+
+            if self._status_bar:
+                self._status_bar.update_running_tools(
+                    running_count,
+                    background_count=background_count,
+                )
+            if self._status_ribbon:
+                for agent_id, count in per_agent_background.items():
+                    self._status_ribbon.set_background_jobs(agent_id, count)
+
+        def action_open_background_tools(self) -> None:
+            """Open modal showing active background tool jobs."""
+            background_tasks = self._collect_background_tools()
+            if not background_tasks:
+                self.notify("No background jobs running", severity="warning", timeout=3)
+                return
+            self._show_modal_async(BackgroundTasksModal(background_tasks))
 
         def action_open_cost_breakdown(self):
             """Open cost breakdown modal."""
@@ -9529,6 +9647,10 @@ Type your question and press Enter to ask the agents.
         def on_status_bar_events_clicked(self, event: StatusBarEventsClicked) -> None:
             """Handle click on status bar events counter - opens orchestrator events modal."""
             self._show_orchestrator_modal()
+
+        def on_status_bar_tools_clicked(self, event: StatusBarToolsClicked) -> None:
+            """Handle click on status bar running/background tools indicator."""
+            self.action_open_background_tools()
 
         def on_status_bar_cwd_clicked(self, event: StatusBarCwdClicked) -> None:
             """Handle CWD mode change from status bar click."""
@@ -12370,6 +12492,14 @@ Type your question and press Enter to ask the agents.
             except Exception:
                 return 0
 
+        def _get_running_tools_count(self) -> int:
+            """Get count of running/background tools for this agent."""
+            try:
+                timeline = self.query_one(f"#{self._timeline_section_id}", TimelineSection)
+                return timeline.get_running_tools_count()
+            except Exception:
+                return 0
+
         def _get_background_tools(self) -> list:
             """Get list of background/async operations for this agent."""
             try:
@@ -12377,6 +12507,13 @@ Type your question and press Enter to ask the agents.
                 return timeline.get_background_tools()
             except Exception:
                 return []
+
+        def _update_running_tools_count(self) -> None:
+            """Delegate running/background tool counter refresh to the app."""
+            app = self.app
+            updater = getattr(app, "_update_running_tools_count", None)
+            if callable(updater):
+                updater()
 
         def _header_text(self) -> str:
             """Compose full header text (for compatibility)."""

@@ -3505,6 +3505,17 @@ StatusBar > Static {
     margin-right: 2;
 }
 
+#status_tools {
+    width: auto;
+    color: $warning;
+    margin-right: 2;
+}
+
+#status_tools.clickable:hover {
+    color: $text;
+    text-style: underline;
+}
+
 /* Spacer to push right-side elements to the edge */
 #status_spacer {
     width: 1fr;
@@ -6202,11 +6213,13 @@ BackgroundTaskDetailModal .modal-close:hover {
 
 BackgroundTaskDetailModal .info-section {
     height: auto;
+    max-height: 16;
     width: 100%;
     padding: 1;
     margin-bottom: 1;
     background: $background;
     border-left: solid $warning;
+    overflow-y: auto;
 }
 
 BackgroundTaskDetailModal .output-header {

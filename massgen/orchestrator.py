@@ -55,6 +55,7 @@ from .logger_config import (
     set_log_attempt,
 )
 from .mcp_tools.hooks import (
+    BackgroundToolCompleteHook,
     GeneralHookManager,
     HighPriorityTaskReminderHook,
     HookType,
@@ -1462,11 +1463,6 @@ class Orchestrator(ChatAgent):
             logger.info(
                 f"[Orchestrator] Adding --use-two-tier-workspace flag to planning MCP for {agent_id}",
             )
-
-        # Require verification fields when checklist-gated voting is active
-        require_verification = hasattr(self.config, "orchestrator_config") and getattr(self.config.orchestrator_config, "voting_sensitivity", None) == "checklist_gated"
-        if require_verification:
-            args.append("--require-verification")
 
         logger.info(f"[Orchestrator] Planning MCP args for {agent_id}: {args}")
 
@@ -5520,6 +5516,17 @@ Your answer:"""
             subagent_hook.set_pending_results_getter(make_pending_getter(agent_id))
             manager.register_global_hook(HookType.POST_TOOL_USE, subagent_hook)
             logger.debug(f"[Orchestrator] Registered SubagentCompleteHook for {agent_id}")
+
+        # Register background tool completion hook for async tool result injection
+        if hasattr(agent.backend, "get_pending_background_tool_results"):
+            background_tool_hook = BackgroundToolCompleteHook()
+            background_tool_hook.set_completed_jobs_getter(
+                agent.backend.get_pending_background_tool_results,
+            )
+            manager.register_global_hook(HookType.POST_TOOL_USE, background_tool_hook)
+            logger.debug(
+                f"[Orchestrator] Registered BackgroundToolCompleteHook for {agent_id}",
+            )
         # Register per-round timeout hooks if configured
         self._register_round_timeout_hooks(agent_id, manager)
 
@@ -5924,6 +5931,17 @@ Your answer:"""
             subagent_hook.set_pending_results_getter(make_pending_getter(agent_id))
             manager.register_global_hook(HookType.POST_TOOL_USE, subagent_hook)
             logger.debug(f"[Orchestrator] Registered SubagentCompleteHook (native) for {agent_id}")
+
+        # Register background tool completion hook for async tool result injection
+        if hasattr(agent.backend, "get_pending_background_tool_results"):
+            background_tool_hook = BackgroundToolCompleteHook()
+            background_tool_hook.set_completed_jobs_getter(
+                agent.backend.get_pending_background_tool_results,
+            )
+            manager.register_global_hook(HookType.POST_TOOL_USE, background_tool_hook)
+            logger.debug(
+                f"[Orchestrator] Registered BackgroundToolCompleteHook (native) for {agent_id}",
+            )
         # Register per-round timeout hooks if configured
         self._register_round_timeout_hooks(agent_id, manager)
 
@@ -6110,54 +6128,8 @@ Your answer:"""
                 await self._close_agent_stream(agent_id, self._active_streams)
 
     async def _cleanup_background_shells_for_agent(self, agent_id: str) -> None:
-        """Clean up background shells started by this agent at round end.
-
-        Uses MCP tools to list and kill shells, since background shells run in
-        the MCP subprocess (not the main orchestrator process).
-
-        Args:
-            agent_id: The agent identifier
-        """
-        agent = self.agents.get(agent_id)
-        if not agent or not hasattr(agent.backend, "_mcp_client") or not agent.backend._mcp_client:
-            return
-
-        mcp_client = agent.backend._mcp_client
-
-        try:
-            # List all background shells via MCP tool
-            list_result = await mcp_client.call_tool(
-                "mcp__command_line__list_background_shells",
-                {},
-            )
-
-            if not list_result or not isinstance(list_result, dict):
-                return
-
-            shells = list_result.get("shells", [])
-            if not shells:
-                return
-
-            # Kill each running shell
-            for shell_info in shells:
-                shell_id = shell_info.get("shell_id")
-                status = shell_info.get("status")
-
-                if shell_id and status == "running":
-                    try:
-                        await mcp_client.call_tool(
-                            "mcp__command_line__kill_background_shell",
-                            {"shell_id": shell_id},
-                        )
-                        logger.info(
-                            f"[Orchestrator] Killed background shell {shell_id} at round end for {agent_id}",
-                        )
-                    except Exception as e:
-                        logger.warning(f"[Orchestrator] Failed to kill shell {shell_id}: {e}")
-
-        except Exception as e:
-            # MCP tool not available or other error - not critical
-            logger.debug(f"[Orchestrator] Could not clean up background shells for {agent_id}: {e}")
+        """Compatibility shim after removing command-line background shell MCP tools."""
+        return
 
     # TODO (v0.0.14 Context Sharing Enhancement - See docs/dev_notes/v0.0.14-context.md):
     # Add the following permission validation methods:

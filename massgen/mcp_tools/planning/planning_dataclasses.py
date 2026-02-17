@@ -89,7 +89,7 @@ class TaskPlan:
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
     subagents: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    require_verification: bool = False
+    require_verification: bool = True
 
     def __post_init__(self):
         """Initialize task index for fast lookups."""
@@ -232,6 +232,7 @@ class TaskPlan:
         priority: Literal["low", "medium", "high"] = "medium",
         verification: Optional[str] = None,
         verification_method: Optional[str] = None,
+        skip_verification: bool = False,
     ) -> Task:
         """
         Add a new task to the plan.
@@ -244,6 +245,7 @@ class TaskPlan:
             priority: Task priority level (low/medium/high, defaults to medium)
             verification: What success looks like (acceptance criteria)
             verification_method: How to verify it (specific steps)
+            skip_verification: If True, bypass require_verification enforcement (for framework tasks)
 
         Returns:
             The newly created task
@@ -265,8 +267,8 @@ class TaskPlan:
                 if dep_id not in self._task_index:
                     raise ValueError(f"Dependency task does not exist: {dep_id}")
 
-        # Enforce verification fields if required
-        if self.require_verification and not verification:
+        # Enforce verification fields if required (skip for framework-injected tasks)
+        if self.require_verification and not skip_verification and not verification:
             raise ValueError(
                 f"Task '{description[:60]}' is missing required 'verification' field. " "Provide acceptance criteria describing what success looks like.",
             )

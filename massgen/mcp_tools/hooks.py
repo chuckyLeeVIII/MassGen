@@ -941,6 +941,93 @@ class SubagentCompleteHook(PatternHook):
             return result
 
 
+class BackgroundToolCompleteHook(PatternHook):
+    """PostToolUse hook that injects completed background tool results."""
+
+    def __init__(
+        self,
+        name: str = "background_tool_complete",
+        get_completed_jobs: Optional[Callable[[], List[Dict[str, Any]]]] = None,
+        injection_strategy: str = "tool_result",
+        max_result_chars: int = 600,
+    ):
+        super().__init__(name, matcher="*", timeout=5)
+        self._get_completed_jobs = get_completed_jobs
+        self._injection_strategy = injection_strategy
+        self._max_result_chars = max_result_chars
+
+    def set_completed_jobs_getter(
+        self,
+        getter: Callable[[], List[Dict[str, Any]]],
+    ) -> None:
+        """Set the function used to retrieve completed background jobs."""
+        self._get_completed_jobs = getter
+
+    def _format_completed_jobs(self, jobs: List[Dict[str, Any]]) -> str:
+        """Format completed background jobs for injection."""
+        lines = [
+            "",
+            "=" * 60,
+            "🔄 BACKGROUND TOOL RESULTS",
+            "=" * 60,
+            "",
+        ]
+
+        for job in jobs:
+            job_id = str(job.get("job_id", "unknown"))
+            tool_name = str(job.get("tool_name", "unknown_tool"))
+            status = str(job.get("status", "completed"))
+            lines.append(f"- [{job_id}] {tool_name} ({status})")
+
+            if job.get("result"):
+                result_text = str(job.get("result", ""))
+                if len(result_text) > self._max_result_chars:
+                    result_text = result_text[: self._max_result_chars] + "..."
+                lines.append(f"  Result: {result_text}")
+            elif job.get("error"):
+                lines.append(f"  Error: {job.get('error')}")
+
+            lines.append("")
+
+        lines.append("=" * 60)
+        return "\n".join(lines)
+
+    async def execute(
+        self,
+        function_name: str,
+        arguments: str,
+        context: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> HookResult:
+        """Inject completed background tool results when available."""
+        if not self._get_completed_jobs:
+            return HookResult.allow()
+
+        try:
+            completed_jobs = self._get_completed_jobs()
+            if not completed_jobs:
+                return HookResult.allow()
+
+            content = self._format_completed_jobs(completed_jobs)
+            logger.debug(
+                f"[BackgroundToolCompleteHook] Injecting {len(completed_jobs)} completed background job(s)",
+            )
+            return HookResult(
+                allowed=True,
+                inject={
+                    "content": content,
+                    "strategy": self._injection_strategy,
+                },
+            )
+        except Exception as e:
+            error_msg = f"Background tool result injection failed: {e}"
+            logger.error(f"[BackgroundToolCompleteHook] {error_msg}", exc_info=True)
+            result = HookResult.allow()
+            result.add_error(error_msg)
+            result.metadata["injection_skipped"] = True
+            return result
+
+
 class HighPriorityTaskReminderHook(PatternHook):
     """PostToolUse hook that injects reminder when high-priority task is completed.
 
@@ -1611,6 +1698,8 @@ __all__ = [
     "GeneralHookManager",
     # Built-in hooks
     "MidStreamInjectionHook",
+    "BackgroundToolCompleteHook",
+    "SubagentCompleteHook",
     "HighPriorityTaskReminderHook",
     "HumanInputHook",
     # Per-round timeout hooks

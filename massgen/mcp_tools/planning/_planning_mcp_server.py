@@ -228,7 +228,7 @@ def _load_plan_from_filesystem(agent_id: str) -> Optional[TaskPlan]:
         return None
 
 
-def _get_or_create_plan(agent_id: str, orchestrator_id: str, require_verification: bool = False) -> TaskPlan:
+def _get_or_create_plan(agent_id: str, orchestrator_id: str, require_verification: bool = True) -> TaskPlan:
     """
     Get existing plan or create new one for agent.
 
@@ -364,9 +364,9 @@ async def create_server() -> fastmcp.FastMCP:
         help="Enable git commits on task completion (requires two-tier workspace)",
     )
     parser.add_argument(
-        "--require-verification",
+        "--no-require-verification",
         action="store_true",
-        help="Require verification and verification_method fields on all agent-created tasks",
+        help="Disable requiring verification and verification_method fields on agent-created tasks (enabled by default)",
     )
     args = parser.parse_args()
 
@@ -399,20 +399,24 @@ async def create_server() -> fastmcp.FastMCP:
     mcp.skills_enabled = args.skills_enabled
     mcp.auto_discovery_enabled = args.auto_discovery_enabled
     mcp.memory_enabled = args.memory_enabled
-    mcp.require_verification = args.require_verification
+    mcp.require_verification = not args.no_require_verification
 
     logger.debug(f"[PlanningMCP] Server configured - skills={args.skills_enabled}, auto_discovery={args.auto_discovery_enabled}, memory={args.memory_enabled}")
 
     @mcp.tool()
-    def create_task_plan(tasks: List[Union[str, Dict[str, Any]]]) -> Dict[str, Any]:
+    def create_task_plan(tasks: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Create a new task plan with a list of tasks.
 
-        Tasks can be simple strings or structured dictionaries with dependencies.
+        Each task must be a structured dictionary.
+        By default, task dictionaries should include verification criteria.
+        (If server is started with --no-require-verification, verification fields are optional.)
 
         Args:
-            tasks: List of task descriptions or task objects. Each task can have:
+            tasks: List of task dictionaries. Each task can have:
                 - description (str): Task description (required)
+                - verification (str): Acceptance criteria (required by default)
+                - verification_method (str): How to verify output-first (strongly recommended)
                 - id (str): Custom task ID (optional, auto-generated if not provided)
                 - depends_on (list): Task IDs or indices this task depends on
                 - priority (str): "low", "medium", or "high" (default: "medium")
@@ -427,9 +431,27 @@ async def create_server() -> fastmcp.FastMCP:
 
         Examples:
             create_task_plan([
-                {"id": "research", "description": "Research OAuth providers"},
-                {"id": "implement", "description": "Implement OAuth", "depends_on": ["research"], "priority": "high"},
-                {"id": "test", "description": "Write tests", "depends_on": ["implement"]}
+                {
+                    "id": "research",
+                    "description": "Research OAuth providers",
+                    "verification": "Comparison table with 3+ providers",
+                    "verification_method": "Review output table for coverage and accuracy"
+                },
+                {
+                    "id": "implement",
+                    "description": "Implement OAuth",
+                    "depends_on": ["research"],
+                    "priority": "high",
+                    "verification": "OAuth login works end-to-end",
+                    "verification_method": "Run login flow and confirm callback exchanges token"
+                },
+                {
+                    "id": "test",
+                    "description": "Write tests",
+                    "depends_on": ["implement"],
+                    "verification": "All auth tests pass",
+                    "verification_method": "Run pytest auth test suite"
+                }
             ])
 
         Dependency Rules:
@@ -524,10 +546,7 @@ async def create_server() -> fastmcp.FastMCP:
             # Create tasks
             created_tasks = []
             for task_spec in normalized_tasks:
-                # Framework tasks bypass verification requirement
                 is_framework = task_spec.get("id") in framework_task_ids
-                if is_framework:
-                    plan.require_verification = False
 
                 task = plan.add_task(
                     description=task_spec["description"],
@@ -536,11 +555,9 @@ async def create_server() -> fastmcp.FastMCP:
                     priority=task_spec.get("priority", "medium"),
                     verification=task_spec.get("verification") or task_spec.get("metadata", {}).get("verification"),
                     verification_method=task_spec.get("verification_method") or task_spec.get("metadata", {}).get("verification_method"),
+                    skip_verification=is_framework,
                 )
                 created_tasks.append(task.to_dict())
-
-                if is_framework:
-                    plan.require_verification = getattr(mcp, "require_verification", False)
 
             # Save to filesystem if configured
             _save_plan_to_filesystem(plan)
@@ -605,7 +622,7 @@ async def create_server() -> fastmcp.FastMCP:
             after_task_id: Optional ID to insert after (otherwise appends)
             depends_on: Optional list of task IDs this task depends on
             priority: Task priority (low/medium/high, defaults to medium)
-            verification: What success looks like (acceptance criteria). When provided, this task requires explicit verification before it is considered done.
+            verification: What success looks like (acceptance criteria). Required by default unless server runs with --no-require-verification.
             verification_method: How to verify (specific steps, e.g. "screenshot and check with read_media")
 
         Returns:

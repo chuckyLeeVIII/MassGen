@@ -2085,6 +2085,47 @@ class CommandExecutionSection(SystemPromptSection):
         parts = ["## Command Execution"]
         parts.append("You can run command line commands using your command execution tool.")
         parts.append("**Efficiency**: Batch multiple commands in one call using `&&` (e.g., `ls servers/ && ls custom_tools/`)\n")
+        parts.append("### Background Tool Execution")
+        parts.append("Always run `read_media` and `generate_media` in background.")
+        parts.append(
+            "Order matters: create `CONTEXT.md` first, then start any `read_media`/`generate_media` background job.",
+        )
+        parts.append(
+            "Only run them in foreground when the user explicitly needs an immediate blocking result " "(set `async: false` on that call).",
+        )
+        parts.append(
+            "For `execute_command`, choose background mode only for long-running work " "(for example: test suites, installs, crawls, benchmarks, or long server runs).",
+        )
+        parts.append(
+            "Use foreground when output is needed immediately " "(for example: quick `ls`, `pwd`, `cat`, `git status`, or short grep checks).",
+        )
+        parts.append(
+            "For other tools, use your judgment: run in background when the call is slow and " "you can continue meaningful work without waiting for its result.",
+        )
+        parts.append(
+            "Simplest for custom tools: set `async: true` directly on the tool call " "(keep normal tool arguments unchanged).",
+        )
+        parts.append(
+            "Pass tool arguments as JSON objects (normal key/value fields), " "not escaped or stringified JSON blobs.",
+        )
+        parts.append(
+            "Use `custom_tool__start_background_tool` when you need wrapper-style lifecycle control " "or for tools where direct async control is not practical.",
+        )
+        parts.append("Use this lifecycle:")
+        parts.append("- Start: `custom_tool__start_background_tool`")
+        parts.append("- Check progress: `custom_tool__get_background_tool_status`")
+        parts.append("- Fetch final output when complete: `custom_tool__get_background_tool_result`")
+        parts.append("- Cancel if no longer needed: `custom_tool__cancel_background_tool`")
+        parts.append(
+            "- List running tasks (default): `custom_tool__list_background_tools`; " "use `include_all: true` to include completed history",
+        )
+        parts.append("- Block until next completion (when idle): `custom_tool__wait_for_background_tool`")
+        parts.append(
+            "If no meaningful work remains while waiting on background jobs, " "call `custom_tool__wait_for_background_tool` instead of tight polling loops.",
+        )
+        parts.append(
+            "Background results may be auto-injected on a later turn. If not injected, poll status and then fetch the result manually.\n",
+        )
 
         if self.docker_mode:
             parts.append("**IMPORTANT: Docker Execution Environment**")
@@ -2524,11 +2565,11 @@ When working on multi-step tasks:
 - Quick one-off operations
 
 **Tools available:**
-- **create_task_plan** - Create a plan with tasks and dependencies
+- **create_task_plan** - Create a plan with tasks, dependencies, and verification criteria
 - **get_ready_tasks** - Get tasks ready to start (dependencies satisfied)
 - **get_blocked_tasks** - See what's waiting on dependencies
 - **update_task_status** - Mark progress (pending/in_progress/completed/verified)
-- **add_task** - Add new tasks (priority: low/medium/high, optional verification criteria)
+- **add_task** - Add new tasks (priority: low/medium/high, verification criteria required by default)
 - **get_task_plan** - View your complete task plan
 - **edit_task** - Update task descriptions
 - **delete_task** - Remove tasks no longer needed
@@ -2543,13 +2584,14 @@ you'll receive reminders to save learnings to memory). Always read tool response
    - `{"id": "design", "description": "Design auth flow", "depends_on": ["research"], "verification": "Flow diagram renders correctly", "verification_method": "Screenshot and visual check"}`
    - `{"id": "implement", "description": "Implement endpoints", "depends_on": ["design"], "verification": "Endpoints return 200", "verification_method": "curl test each endpoint"}`
 2. **Update task status** as you work: set status="in_progress", then "completed", then "verified" after confirming
-3. **Add tasks** as you discover new requirements: description="Write integration tests", depends_on=["implement"]
+3. **Add tasks** as you discover new requirements:
+   - `description="Write integration tests", depends_on=["implement"], verification="Integration tests pass for auth flow", verification_method="Run integration test suite"`
 4. **Check ready tasks** to see what's unblocked next
 
 **Dependency formats:**
 Tasks support two dependency styles:
-- **By index** (0-based): `{"description": "Task 2", "depends_on": [0]}` — depends on the first task
-- **By ID** (recommended): `{"id": "api", "description": "Build API", "depends_on": ["auth"]}` — depends on task with id "auth"
+- **By index** (0-based): `{"description": "Task 2", "depends_on": [0], "verification": "Task 2 output is complete"}` — depends on the first task
+- **By ID** (recommended): `{"id": "api", "description": "Build API", "depends_on": ["auth"], "verification": "API returns expected responses"}` — depends on task with id "auth"
 
 **IMPORTANT - Including Task Plan in Your Answer:**
 If you created a task plan, include a summary at the end of your `new_answer` showing:
@@ -4203,6 +4245,7 @@ class TaskContextSection(SystemPromptSection):
 
 **REQUIRED**: Before spawning subagents or using multimodal tools (read_media, generate_media),
 you MUST create a `CONTEXT.md` file in your workspace with task context.
+This ordering is strict even for background jobs: write `CONTEXT.md` first, then start media tools.
 
 ### Why This Matters
 External APIs (like GPT-4.1 for image analysis) have no idea what you're working on.
