@@ -46,7 +46,6 @@ We're excited to release MassGen v0.1.53, focused on Background Tool Execution! 
 **Also in this release:**
 - TUI background job indicators: Agent status ribbon and background tasks modal with lifecycle controls
 - Subagent infrastructure: Groundwork for specialized subagent types (Evaluator, Explorer) via `SUBAGENT.md` frontmatter
-- Hook framework: Broadcasting subagent results to parent agents
 - Tool argument normalization: Consistent argument handling across backends
 
 **Bug Fixes:**

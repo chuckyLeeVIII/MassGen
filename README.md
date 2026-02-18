@@ -174,7 +174,7 @@ pip install --upgrade massgen
 uv run massgen
 
 # Multi-agent coordination with background tool execution
-uv run massgen --config @examples/basic/multi/three_agents_default "Build and test a REST API"
+uv run massgen --config @examples/tools/custom_tools/docker_with_background.yaml "Create a multi-page website. Include an AI-generated image you generate in the background while building the website"
 ```
 
 → [See full release history and examples](massgen/configs/README.md#release-history--examples)
