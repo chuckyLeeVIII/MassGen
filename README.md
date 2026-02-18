@@ -163,7 +163,7 @@ This project started with the "threads of thought" and "iterative refinement" id
 - **⏳ Background Tool Execution** - Non-blocking lifecycle tools for long-running work: start, monitor, wait, cancel, and list background jobs. Compatible with custom tools and MCP server tools.
 - **✅ Planning Task Verification** - Tasks now require `verification` and `verification_method` fields by default. `--no-require-verification` flag to opt out.
 - **🎯 TUI Background Job Indicators** - Agent status ribbon with background job indicators and background tasks modal with lifecycle controls.
-- **🔧 Subagent Infrastructure** - Groundwork for specialized subagent types (Evaluator, Explorer) via `SUBAGENT.md` frontmatter. Result broadcasting via hooks. Tool argument normalization across backends.
+- **🔧 Subagent Infrastructure** - Groundwork for specialized subagent types (Evaluator, Explorer) via `SUBAGENT.md` frontmatter. Tool argument normalization across backends.
 
 **Try v0.1.53 Features:**
 ```bash
@@ -1256,7 +1256,6 @@ MassGen is currently in its foundational stage, with a focus on parallel, asynch
 
 #### Also in this release
 - **Subagent Infrastructure**: Groundwork for specialized subagent types (Evaluator, Explorer) via `SUBAGENT.md` frontmatter
-- **Hook Framework**: Broadcasting subagent results to agents via hooks
 - **Tool Argument Normalization**: Consistent argument handling across backends
 
 #### Bug Fixes

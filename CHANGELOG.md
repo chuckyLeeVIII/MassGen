@@ -36,7 +36,6 @@ Review modal with multi-file diff visualization. Decision journal system for mul
 
 - **Subagent Infrastructure** ([#917](https://github.com/massgen/MassGen/pull/917)): Groundwork for specialized subagent types
   - Evaluator and Explorer type definitions via `SUBAGENT.md` frontmatter
-  - Broadcasting subagent results to agents via hooks
 
 ### Changed
 - **Tool Argument Normalization** ([#917](https://github.com/massgen/MassGen/pull/917)): Consistent argument handling across backends

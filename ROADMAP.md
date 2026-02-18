@@ -259,7 +259,6 @@ Want to contribute or collaborate on a specific track? Reach out to the track ow
 **4. Subagent Infrastructure** (@ncrispino)
 - PR: [#917](https://github.com/massgen/MassGen/pull/917)
 - Groundwork for specialized subagent types: Evaluator and Explorer definitions via `SUBAGENT.md` frontmatter
-- Broadcasting subagent results to agents via hooks
 - Tool argument normalization for consistent handling across backends
 - **Use Case**: Foundation for specialized subagent types (maturing in future releases)
 
@@ -267,7 +266,7 @@ Want to contribute or collaborate on a specific track? Reach out to the track ow
 - ✅ Background tool lifecycle (start, monitor, wait, cancel, list) working
 - ✅ Planning tasks require verification fields by default
 - ✅ TUI background job indicators and modal controls
-- ✅ Subagent type infrastructure and result broadcasting
+- ✅ Subagent type infrastructure (Evaluator, Explorer)
 
 ---
 
