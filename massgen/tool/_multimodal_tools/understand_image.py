@@ -1,5 +1,5 @@
 """
-Understand and analyze images using OpenAI's gpt-4.1 API.
+Understand and analyze images using OpenAI's gpt-5.2 API.
 
 Supports single image or multiple images in one API call for comparison/analysis.
 """
@@ -207,16 +207,16 @@ def _load_and_process_image(
 async def understand_image(
     image_path: str | None = None,
     prompt: str = "What's in this image? Please describe it in detail.",
-    model: str = "gpt-4.1",
+    model: str = "gpt-5.2",
     allowed_paths: list[str] | None = None,
     agent_cwd: str | None = None,
     task_context: str | None = None,
     images: dict[str, str] | None = None,
 ) -> ExecutionResult:
     """
-    Understand and analyze one or more images using OpenAI's gpt-4.1 API.
+    Understand and analyze one or more images using OpenAI's gpt-5.2 API.
 
-    This tool processes images through OpenAI's gpt-4.1 API to extract insights,
+    This tool processes images through OpenAI's gpt-5.2 API to extract insights,
     descriptions, or answer questions about image content. Supports multiple images
     in a single call for comparison or joint analysis.
 
@@ -225,7 +225,7 @@ async def understand_image(
                    Use this for simple single-image analysis.
         prompt: Question or instruction about the image(s).
                 When using `images` dict, reference images by their keys.
-        model: Model to use (default: "gpt-4.1")
+        model: Model to use (default: "gpt-5.2")
         allowed_paths: List of allowed base paths for validation (optional)
         agent_cwd: Agent's current working directory (automatically injected)
         task_context: Task context for prompt augmentation (automatically injected)

@@ -867,6 +867,37 @@ async def create_server() -> fastmcp.FastMCP:
                 "error": str(e),
             }
 
+    @mcp.tool()
+    async def cancel_subagent(subagent_id: str) -> dict[str, Any]:
+        """Cancel a running subagent.
+
+        Internal handler called by the background tool delegate — not intended
+        for direct model use. The model uses cancel_background_tool instead.
+
+        Args:
+            subagent_id: ID of the subagent to cancel
+        """
+        try:
+            manager = _get_manager()
+
+            if not subagent_id or not subagent_id.strip():
+                return {
+                    "success": False,
+                    "operation": "cancel_subagent",
+                    "error": "Missing required 'subagent_id' parameter",
+                }
+
+            result = await manager.cancel_subagent(subagent_id)
+            return result
+
+        except Exception as e:
+            logger.error(f"[SubagentMCP] Error cancelling subagent: {e}")
+            return {
+                "success": False,
+                "operation": "cancel_subagent",
+                "error": str(e),
+            }
+
     return mcp
 
 

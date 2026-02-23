@@ -375,17 +375,80 @@ class SubagentStatusLine(Static):
         "error": "✗",
         "failed": "✗",
         "timeout": "⏱",
+        "canceled": "⊘",
+        "cancelled": "⊘",
+        "stopped": "⊘",
         "pending": "○",
         "success": "✓",
     }
+    _STATUS_STYLE_CLASSES = (
+        "running",
+        "completed",
+        "error",
+        "canceled",
+        "cancelled",
+    )
+
+    @staticmethod
+    def _normalize_status(status: str) -> str:
+        normalized = str(status or "").lower().strip()
+        if normalized in {"cancelled", "canceled", "stopped"}:
+            return "canceled"
+        return normalized or "running"
+
+    @staticmethod
+    def _format_status_label(status: str) -> str:
+        if status == "canceled":
+            return "Canceled"
+        if status == "error":
+            return "Error"
+        return status.capitalize()
+
+    @staticmethod
+    def _is_redundant_reason(status: str, reason: str) -> bool:
+        """Suppress reason text that just repeats the status label."""
+        if status != "canceled":
+            return False
+        normalized_reason = " ".join(
+            reason.lower().replace(".", " ").replace(":", " ").replace("_", " ").split(),
+        )
+        redundant_cancel_reasons = {
+            "canceled",
+            "cancelled",
+            "stopped",
+            "subagent canceled",
+            "subagent cancelled",
+            "subagent stopped",
+        }
+        return normalized_reason in redundant_cancel_reasons
 
     def __init__(self, status: str = "running", **kwargs) -> None:
         super().__init__(**kwargs)
-        self._status = status
+        self._status = self._normalize_status(status)
         self._elapsed = 0
+        self._reason = ""
         self._agent_order: list[str] = []
         self._agent_letters: dict[str, str] = {}
         self._agent_active: dict[str, bool] = {}
+        self._update_status_class()
+
+    def _update_status_class(self) -> None:
+        """Apply a stable status class so themes can style terminal states."""
+        for status_class in self._STATUS_STYLE_CLASSES:
+            self.remove_class(status_class)
+
+        normalized = self._normalize_status(self._status)
+        if normalized in {"completed", "success"}:
+            self.add_class("completed")
+            return
+        if normalized == "canceled":
+            self.add_class("canceled")
+            self.add_class("cancelled")
+            return
+        if normalized in {"failed", "error", "timeout"}:
+            self.add_class("error")
+            return
+        self.add_class("running")
 
     def set_agents(self, agent_ids: list[str]) -> None:
         """Register the inner agents for activity display."""
@@ -406,6 +469,7 @@ class SubagentStatusLine(Static):
     def render(self) -> Text:
         """Render agent dots + status."""
         text = Text()
+        normalized_status = self._normalize_status(self._status)
 
         # Agent activity dots: A ● B ○
         if self._agent_order:
@@ -421,11 +485,17 @@ class SubagentStatusLine(Static):
             text.append("  ")
 
         # Status
-        icon = self.STATUS_ICONS.get(self._status, "●")
+        icon = self.STATUS_ICONS.get(normalized_status, "●")
         text.append(f"{icon} ", style="bold")
-        text.append(self._status.capitalize())
-        if self._status == "running":
+        text.append(self._format_status_label(normalized_status))
+        if normalized_status == "running":
             text.append(f" ({self._elapsed}s)")
+        elif self._reason and normalized_status in {"failed", "error", "timeout", "canceled"}:
+            reason = self._reason.replace("\n", " ").strip()
+            if len(reason) > 72:
+                reason = reason[:69] + "..."
+            if not self._is_redundant_reason(normalized_status, reason):
+                text.append(f": {reason}")
 
         # Hints
         text.append("  ")
@@ -433,10 +503,15 @@ class SubagentStatusLine(Static):
 
         return text
 
-    def update_status(self, status: str, elapsed: int = 0) -> None:
+    def update_status(self, status: str, elapsed: int = 0, reason: str | None = None) -> None:
         """Update the status display."""
-        self._status = status
+        self._status = self._normalize_status(status)
         self._elapsed = elapsed
+        if reason is not None:
+            self._reason = reason
+        elif self._status == "running":
+            self._reason = ""
+        self._update_status_class()
         self.refresh()
 
 
@@ -826,6 +901,7 @@ class SubagentView(Container):
         self._inner_agent_models: dict[str, str] = {}
         self._current_inner_agent: str | None = None
         self._tool_call_agent_map: dict[str, str] = {}
+        self._terminal_status_notes: set[str] = set()
         self._auto_return_on_completion = auto_return_on_completion
         self._auto_return_prompt_delay_seconds = max(0.0, float(auto_return_prompt_delay_seconds))
         self._auto_return_timeout_seconds = max(1, int(auto_return_timeout_seconds))
@@ -1029,6 +1105,9 @@ class SubagentView(Container):
         if self._current_inner_agent:
             self._load_events_for_agent(self._current_inner_agent)
             self._agents_loaded.add(self._current_inner_agent)
+
+        # Ensure status classes/reason are applied even for terminal states on first paint.
+        self._update_status_display()
 
         # Start polling if subagent is running
         if self._subagent.status in ("running", "pending"):
@@ -1326,6 +1405,113 @@ class SubagentView(Container):
         if self._inner_winner and self._inner_tab_bar:
             self._inner_tab_bar.set_winner(self._inner_winner)
 
+    @staticmethod
+    def _normalize_subagent_status(status: str | None) -> str:
+        normalized = str(status or "").lower().strip()
+        if normalized in {"cancelled", "canceled", "stopped"}:
+            return "canceled"
+        return normalized or "running"
+
+    @staticmethod
+    def _tab_status(status: str | None) -> str:
+        normalized = SubagentView._normalize_subagent_status(status)
+        if normalized == "canceled":
+            return "cancelled"
+        return normalized
+
+    @staticmethod
+    def _is_redundant_terminal_reason(status: str, reason: str) -> bool:
+        """Return True when reason only repeats the terminal status message."""
+        normalized_reason = " ".join(
+            reason.lower().replace(".", " ").replace(":", " ").replace("_", " ").split(),
+        )
+        if not normalized_reason:
+            return True
+
+        redundant_reasons = {
+            "completed": {"completed", "subagent completed"},
+            "timeout": {"timeout", "timed out", "subagent timeout", "subagent timed out"},
+            "canceled": {
+                "canceled",
+                "cancelled",
+                "stopped",
+                "subagent canceled",
+                "subagent cancelled",
+                "subagent stopped",
+            },
+            "failed": {"failed", "error", "subagent failed", "subagent error"},
+            "error": {"failed", "error", "subagent failed", "subagent error"},
+        }
+        return normalized_reason in redundant_reasons.get(status, set())
+
+    def _build_terminal_status_note(self) -> tuple[str, str] | None:
+        status = self._normalize_subagent_status(self._subagent.status)
+        if status in {"running", "pending"}:
+            return None
+
+        reason = str(self._subagent.error or "").strip()
+        if status == "completed":
+            message = "Subagent completed."
+            style = "#7ee787"
+        elif status == "timeout":
+            message = "Subagent timed out."
+            style = "#d29922"
+        elif status == "canceled":
+            message = "Subagent canceled."
+            style = "#d29922"
+        elif status in {"failed", "error"}:
+            message = "Subagent failed."
+            style = "#f85149"
+        else:
+            message = f"Subagent {status}."
+            style = "#8b949e"
+
+        if reason and not self._is_redundant_terminal_reason(status, reason):
+            if message.endswith("."):
+                message = message[:-1]
+            message = f"{message}: {reason}"
+        return message, style
+
+    def _ensure_terminal_status_note(self, agent_id: str, event_count: int = 0) -> None:
+        """Add a one-line terminal status note when no events were rendered."""
+        if event_count > 0 or not self._panel:
+            return
+
+        status = self._normalize_subagent_status(self._subagent.status)
+        if status in {"running", "pending"}:
+            return
+        if agent_id in self._terminal_status_notes:
+            return
+
+        note = self._build_terminal_status_note()
+        if note is None:
+            return
+        message, style = note
+
+        try:
+            timeline = self._panel.query_one(
+                f"#subagent-timeline-{agent_id}",
+                TimelineSection,
+            )
+        except Exception:
+            return
+
+        try:
+            round_number = max(1, int(self._round_number or 1))
+        except Exception:
+            round_number = 1
+
+        try:
+            timeline.add_text(
+                message,
+                style=style,
+                text_class="status",
+                round_number=round_number,
+            )
+            self._terminal_status_notes.add(agent_id)
+        except Exception as e:
+            tui_log(f"[SubagentScreen] Failed to add terminal status note: {e}")
+
     def _poll_updates(self) -> None:
         """Poll for status and event updates."""
         # Update status if callback available
@@ -1340,6 +1526,8 @@ class SubagentView(Container):
             self._init_event_reader()
             if self._event_reader:
                 self._load_initial_events()
+            elif self._current_inner_agent:
+                self._ensure_terminal_status_note(self._current_inner_agent, event_count=0)
 
         # Read new events and route to all loaded adapters
         if self._event_reader:
@@ -1400,14 +1588,17 @@ class SubagentView(Container):
         agent_id = self._current_inner_agent
         adapter = self._event_adapters.get(agent_id) if agent_id else None
         current_round = adapter.round_number if adapter else self._round_number
+        status = self._normalize_subagent_status(self._subagent.status)
+        self._set_cancelled_state_class(status)
 
         if self._header:
             self._header.update_subagent(self._subagent)
 
         if self._status_line:
             self._status_line.update_status(
-                self._subagent.status,
+                status,
                 int(self._subagent.elapsed_seconds),
+                reason=self._subagent.error,
             )
 
         # Update ribbon
@@ -1418,7 +1609,13 @@ class SubagentView(Container):
         if self._tab_bar:
             index_to_tab = {v: k for k, v in self._tab_id_to_index.items()} if hasattr(self, "_tab_id_to_index") else {}
             tab_id = index_to_tab.get(self._current_index, self._subagent.id)
-            self._tab_bar.update_agent_status(tab_id, self._subagent.status)
+            self._tab_bar.update_agent_status(tab_id, self._tab_status(status))
+
+    def _set_cancelled_state_class(self, normalized_status: str) -> None:
+        """Mirror main-screen cancelled treatment for subagent full-screen view."""
+        is_cancelled = normalized_status == "canceled"
+        self.set_class(is_cancelled, "cancelled-state")
+        self.set_class(is_cancelled, "canceled-state")
 
     def _update_activity_dots(self, events: list[MassGenEvent]) -> None:
         """Update agent activity dots based on new events."""
@@ -1454,6 +1651,7 @@ class SubagentView(Container):
             self._agents_loaded.clear()
             self._final_answer_locked.clear()
             self._tool_call_agent_map.clear()
+            self._terminal_status_notes.clear()
             self._inner_winner = None
             self._queued_runtime_messages = []
             self._queued_runtime_pending_by_agent = {}
@@ -1511,9 +1709,11 @@ class SubagentView(Container):
                 active_tab_id = index_to_tab.get(self._current_index, self._subagent.id)
                 self._tab_bar.set_active(active_tab_id)
                 for idx, sa in enumerate(self._all_subagents):
-                    if sa.status not in ("running", "pending"):
-                        tab_id = index_to_tab.get(idx, sa.id)
-                        self._tab_bar.update_agent_status(tab_id, "completed")
+                    tab_id = index_to_tab.get(idx, sa.id)
+                    self._tab_bar.update_agent_status(
+                        tab_id,
+                        self._tab_status(sa.status),
+                    )
 
             # Update ribbon agent
             if self._ribbon:
@@ -1562,10 +1762,14 @@ class SubagentView(Container):
         Args:
             agent_id: The agent ID to filter by, or None for all events
         """
-        if not self._event_reader or not self._panel:
+        if not self._panel:
             return
 
         aid = agent_id or self._subagent.id
+        if not self._event_reader:
+            self._ensure_terminal_status_note(aid, event_count=0)
+            self._update_status_display()
+            return
 
         # Create adapter for this agent if needed
         if aid not in self._event_adapters:
@@ -1580,6 +1784,8 @@ class SubagentView(Container):
         events = self._filter_events_for_agent(all_events, agent_id) if agent_id else all_events
 
         logger.info(f"[SubagentScreen] Loading {len(events)} events for agent {aid}")
+        if not events:
+            self._ensure_terminal_status_note(aid, event_count=0)
         for event in events:
             adapter.handle_event(self._display_round(event))
         adapter.flush()

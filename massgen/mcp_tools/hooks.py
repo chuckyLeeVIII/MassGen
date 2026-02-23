@@ -25,7 +25,7 @@ import json
 import threading
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -866,7 +866,7 @@ class SubagentCompleteHook(PatternHook):
     def __init__(
         self,
         name: str = "subagent_complete",
-        get_pending_results: Callable[[], list] | None = None,
+        get_pending_results: Callable[[], list | Awaitable[list]] | None = None,
         injection_strategy: str = "tool_result",
     ):
         """
@@ -884,7 +884,7 @@ class SubagentCompleteHook(PatternHook):
 
     def set_pending_results_getter(
         self,
-        getter: Callable[[], list],
+        getter: Callable[[], list | Awaitable[list]],
     ) -> None:
         """Set the function to retrieve pending results.
 
@@ -922,6 +922,8 @@ class SubagentCompleteHook(PatternHook):
         try:
             # Get pending results (getter should also clear them)
             pending = self._get_pending_results()
+            if asyncio.iscoroutine(pending):
+                pending = await pending
             if not pending:
                 return HookResult.allow()
 

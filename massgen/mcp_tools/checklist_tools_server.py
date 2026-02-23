@@ -509,6 +509,19 @@ def evaluate_checklist_submission(
                         "element made significantly richer, or thoughtful synthesis that "
                         "combines the best of multiple approaches and improves on them. "
                     )
+            # Novelty subagent guidance: when no transformative work identified,
+            # suggest spawning a novelty subagent to break anchoring
+            if state.get("novelty_subagent_enabled", False) and has_existing_answers and substantiveness_eval.get("valid", False) and substantiveness_eval.get("transformative_count", 0) == 0:
+                explanation += (
+                    "Your evaluation found zero transformative changes. To break through "
+                    "this plateau, spawn a novelty subagent in the background — pass it "
+                    "your diagnostic analysis, the current workspace, and evaluation "
+                    "findings. The novelty subagent will propose fundamentally different "
+                    "directions while you continue working on any structural or "
+                    "incremental improvements already identified. When its results "
+                    "arrive, incorporate at least one transformative suggestion into "
+                    "your work. "
+                )
             explanation += "Your new answer MUST make material changes — do NOT simply copy or " "resubmit the same content."
             if improvements_text:
                 explanation += (

@@ -150,6 +150,46 @@ async def test_round_timeout_hooks_integration_soft_then_hard_timeout(mock_orche
     assert orchestrator.agent_states[agent_id].round_timeout_state.consecutive_hard_denials == 0
 
 
+@pytest.mark.asyncio
+async def test_subagent_post_hook_uses_async_pending_getter(mock_orchestrator, monkeypatch):
+    orchestrator = mock_orchestrator(num_agents=1)
+    agent_id = "agent_a"
+    agent = orchestrator.agents[agent_id]
+    orchestrator._background_subagents_enabled = True
+
+    captured = _capture_general_hook_manager(agent)
+    orchestrator._setup_hook_manager_for_agent(agent_id, agent, {})
+    manager = captured["manager"]
+
+    subagent_result = SubagentResult.create_success(
+        subagent_id="sub-async",
+        answer="done",
+        workspace_path="/tmp/sub-async",
+        execution_time_seconds=1.0,
+    )
+
+    async def fake_async_pending(aid: str):
+        assert aid == agent_id
+        return [("sub-async", subagent_result)]
+
+    def fail_sync_pending(_aid: str):
+        raise AssertionError("Sync pending getter should not be used from post-tool hook")
+
+    monkeypatch.setattr(orchestrator, "_get_pending_subagent_results_async", fake_async_pending, raising=False)
+    monkeypatch.setattr(orchestrator, "_get_pending_subagent_results", fail_sync_pending)
+
+    result = await manager.execute_hooks(
+        HookType.POST_TOOL_USE,
+        "mcp__filesystem__write_file",
+        "{}",
+        {"agent_id": agent_id},
+        tool_output="ok",
+    )
+
+    assert result.inject is not None
+    assert "sub-async" in result.inject["content"]
+
+
 def test_broadcast_tool_registration_adds_custom_tool_names(mock_orchestrator):
     orchestrator = mock_orchestrator(num_agents=2)
     orchestrator.config.coordination_config.broadcast = "agents"
@@ -555,10 +595,14 @@ async def test_setup_hook_manager_registers_subagent_injection_hook(mock_orchest
         workspace_path="/tmp/sub-done",
         execution_time_seconds=2.0,
     )
+
+    async def _pending_results(_agent_id: str):
+        return [("sub-done", pending_result)]
+
     monkeypatch.setattr(
         orchestrator,
-        "_get_pending_subagent_results",
-        lambda _agent_id: [("sub-done", pending_result)],
+        "_get_pending_subagent_results_async",
+        _pending_results,
     )
 
     captured = _capture_general_hook_manager(agent)

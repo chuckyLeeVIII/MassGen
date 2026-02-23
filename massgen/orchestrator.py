@@ -728,6 +728,17 @@ class Orchestrator(ChatAgent):
             total = self.config.max_new_answers_per_agent or 5
             remaining = total
             effective_t = _checklist_effective_threshold(threshold, remaining, total)
+            # Determine active subagent types for novelty gating
+            from massgen.subagent.type_scanner import DEFAULT_SUBAGENT_TYPES
+
+            _active_subagent_types = getattr(
+                getattr(self.config, "coordination_config", None),
+                "subagent_types",
+                None,
+            )
+            if _active_subagent_types is None:
+                _active_subagent_types = DEFAULT_SUBAGENT_TYPES
+
             checklist_state = {
                 "threshold": threshold,
                 "remaining": remaining,
@@ -758,6 +769,8 @@ class Orchestrator(ChatAgent):
                 "item_prefix": "E",
                 # Dynamic core/stretch categories for convergence off-ramp
                 "item_categories": item_categories,
+                # Novelty subagent guidance only when novelty type is available
+                "novelty_subagent_enabled": "novelty" in [t.lower() for t in _active_subagent_types],
             }
             backend._checklist_state = checklist_state
             backend._checklist_items = list(items)
@@ -1059,6 +1072,8 @@ class Orchestrator(ChatAgent):
                     "cwd",
                     None,
                 ),
+                # Preserve novelty gating from initial state (config-driven, doesn't change)
+                "novelty_subagent_enabled": state.get("novelty_subagent_enabled", False),
             },
         )
         # Re-write specs file for stdio backends so the MCP server sees updated state
@@ -1910,9 +1925,18 @@ class Orchestrator(ChatAgent):
         # Discover and serialize specialized subagent types for the MCP server
         specialized_subagents_path = ""
         try:
-            from massgen.subagent.type_scanner import scan_subagent_types
+            from massgen.subagent.type_scanner import (
+                DEFAULT_SUBAGENT_TYPES,
+                scan_subagent_types,
+            )
 
-            specialized_types = scan_subagent_types()
+            _subagent_types_cfg = getattr(
+                getattr(self.config, "coordination_config", None),
+                "subagent_types",
+                None,
+            )
+            _allowed = _subagent_types_cfg if _subagent_types_cfg is not None else DEFAULT_SUBAGENT_TYPES
+            specialized_types = scan_subagent_types(allowed_types=_allowed)
             if specialized_types:
                 specialized_data = [t.to_dict() for t in specialized_types]
                 specialized_file = tempfile.NamedTemporaryFile(
@@ -2335,6 +2359,12 @@ class Orchestrator(ChatAgent):
 
             self._generated_evaluation_criteria = criteria
             self._evaluation_criteria_generated = True
+
+            # Re-initialize checklist tool now that generated criteria are available.
+            # The initial _init_checklist_tool() in __init__ used default items because
+            # criteria hadn't been generated yet. This second call picks up the generated
+            # criteria via the self._generated_evaluation_criteria check (line ~707).
+            self._init_checklist_tool()
 
             # Save to log
             self._save_evaluation_criteria_to_log(criteria)
@@ -5672,7 +5702,10 @@ Your answer:"""
             f"[Orchestrator] Background subagent {subagent_id} completed for {parent_agent_id} " f"(status={result.status}, success={result.success})",
         )
 
-    def _get_pending_subagent_results(self, agent_id: str) -> list[tuple[str, "SubagentResult"]]:
+    async def _get_pending_subagent_results_async(
+        self,
+        agent_id: str,
+    ) -> list[tuple[str, "SubagentResult"]]:
         """Get pending subagent results for an agent by polling the MCP server.
 
         This is called by SubagentCompleteHook to retrieve completed subagent results
@@ -5696,7 +5729,7 @@ Your answer:"""
                 self._injected_subagents[agent_id] = set()
 
             # Poll the subagent MCP server for all subagents.
-            list_result = self._call_subagent_mcp_tool(
+            list_result = await self._call_subagent_mcp_tool_async(
                 parent_agent_id=agent_id,
                 tool_name="list_subagents",
                 params={},
@@ -5758,6 +5791,15 @@ Your answer:"""
         except Exception as e:
             logger.error(f"[Orchestrator] Error polling for completed subagents: {e}", exc_info=True)
             return []
+
+    def _get_pending_subagent_results(
+        self,
+        agent_id: str,
+    ) -> list[tuple[str, "SubagentResult"]]:
+        """Sync wrapper for compatibility with existing sync call sites."""
+        from .utils import run_async_safely
+
+        return run_async_safely(self._get_pending_subagent_results_async(agent_id))
 
     def _setup_hook_manager_for_agent(
         self,
@@ -5970,11 +6012,31 @@ Your answer:"""
 
             # Create a closure that captures agent_id for pending results retrieval
             def make_pending_getter(aid: str):
-                return lambda: self._get_pending_subagent_results(aid)
+                return lambda: self._get_pending_subagent_results_async(aid)
 
             subagent_hook.set_pending_results_getter(make_pending_getter(agent_id))
             manager.register_global_hook(HookType.POST_TOOL_USE, subagent_hook)
             logger.debug(f"[Orchestrator] Registered SubagentCompleteHook for {agent_id}")
+
+            # Wire background tool delegate so list/status/result/cancel route to subagents
+            if hasattr(agent.backend, "register_background_delegate"):
+                from massgen.subagent.background_delegate import (
+                    SubagentBackgroundDelegate,
+                )
+
+                def _make_call_tool(aid: str):
+                    return lambda tool_name, params: self._call_subagent_mcp_tool_async(
+                        aid,
+                        tool_name,
+                        params,
+                    )
+
+                delegate = SubagentBackgroundDelegate(
+                    call_tool=_make_call_tool(agent_id),
+                    agent_id=agent_id,
+                )
+                agent.backend.register_background_delegate(delegate)
+                logger.debug(f"[Orchestrator] Registered SubagentBackgroundDelegate for {agent_id}")
 
         # Register background tool completion hook for async tool result injection
         if hasattr(agent.backend, "get_pending_background_tool_results"):
@@ -6140,7 +6202,7 @@ Your answer:"""
 
         # 2. Check for subagent completions
         if self._background_subagents_enabled and self._pending_subagent_results.get(agent_id):
-            pending = self._get_pending_subagent_results(agent_id)
+            pending = await self._get_pending_subagent_results_async(agent_id)
             if pending:
                 from massgen.subagent.result_formatter import format_batch_results
 
@@ -6324,7 +6386,7 @@ Your answer:"""
         local_pending = list(self._pending_subagent_results.get(agent_id, []))
         if local_pending:
             pending_subagent_results.extend(local_pending)
-        polled_pending = self._get_pending_subagent_results(agent_id)
+        polled_pending = await self._get_pending_subagent_results_async(agent_id)
         if polled_pending:
             pending_subagent_results.extend(polled_pending)
 
@@ -6776,13 +6838,13 @@ Your answer:"""
 
         return None
 
-    def _call_subagent_mcp_tool(
+    async def _call_subagent_mcp_tool_async(
         self,
         parent_agent_id: str,
         tool_name: str,
         params: dict[str, Any],
     ) -> dict[str, Any] | None:
-        """Call a subagent MCP tool for a parent agent across backend implementations."""
+        """Async MCP bridge used by subagent helpers and delegates."""
         agent = self.agents.get(parent_agent_id)
         if not agent:
             return None
@@ -6794,11 +6856,7 @@ Your answer:"""
         mcp_executor = getattr(backend, "_execute_mcp_function_with_retry", None)
         if callable(mcp_executor):
             try:
-                from .utils import run_async_safely
-
-                raw_result = run_async_safely(
-                    mcp_executor(full_tool_name, json.dumps(params)),
-                )
+                raw_result = await mcp_executor(full_tool_name, json.dumps(params))
                 normalized = self._normalize_subagent_mcp_result(raw_result)
                 if normalized is not None:
                     return normalized
@@ -6814,7 +6872,6 @@ Your answer:"""
         background_client_getter = getattr(backend, "_get_background_mcp_client", None)
         if callable(background_client_getter):
             try:
-                from .utils import run_async_safely
 
                 async def _call_with_background_client() -> Any:
                     client = await background_client_getter()
@@ -6825,7 +6882,7 @@ Your answer:"""
                         arguments=params,
                     )
 
-                raw_result = run_async_safely(_call_with_background_client())
+                raw_result = await _call_with_background_client()
                 normalized = self._normalize_subagent_mcp_result(raw_result)
                 if normalized is not None:
                     return normalized
@@ -6843,9 +6900,7 @@ Your answer:"""
             try:
                 call_result = mcp_client.call_tool(full_tool_name, params)
                 if inspect.isawaitable(call_result):
-                    from .utils import run_async_safely
-
-                    call_result = run_async_safely(call_result)
+                    call_result = await call_result
                 normalized = self._normalize_subagent_mcp_result(call_result)
                 if normalized is not None:
                     return normalized
@@ -6858,6 +6913,19 @@ Your answer:"""
                 )
 
         return None
+
+    def _call_subagent_mcp_tool(
+        self,
+        parent_agent_id: str,
+        tool_name: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Sync wrapper for compatibility with legacy sync call sites."""
+        from .utils import run_async_safely
+
+        return run_async_safely(
+            self._call_subagent_mcp_tool_async(parent_agent_id, tool_name, params),
+        )
 
     def _send_runtime_message_via_direct_inbox_write(
         self,
@@ -7337,11 +7405,31 @@ Your answer:"""
 
             # Create a closure that captures agent_id for pending results retrieval
             def make_pending_getter(aid: str):
-                return lambda: self._get_pending_subagent_results(aid)
+                return lambda: self._get_pending_subagent_results_async(aid)
 
             subagent_hook.set_pending_results_getter(make_pending_getter(agent_id))
             manager.register_global_hook(HookType.POST_TOOL_USE, subagent_hook)
             logger.debug(f"[Orchestrator] Registered SubagentCompleteHook (native) for {agent_id}")
+
+            # Wire background tool delegate so list/status/result/cancel route to subagents
+            if hasattr(agent.backend, "register_background_delegate"):
+                from massgen.subagent.background_delegate import (
+                    SubagentBackgroundDelegate,
+                )
+
+                def _make_call_tool(aid: str):
+                    return lambda tool_name, params: self._call_subagent_mcp_tool_async(
+                        aid,
+                        tool_name,
+                        params,
+                    )
+
+                delegate = SubagentBackgroundDelegate(
+                    call_tool=_make_call_tool(agent_id),
+                    agent_id=agent_id,
+                )
+                agent.backend.register_background_delegate(delegate)
+                logger.debug(f"[Orchestrator] Registered SubagentBackgroundDelegate (native) for {agent_id}")
 
         # Register background tool completion hook for async tool result injection
         if hasattr(agent.backend, "get_pending_background_tool_results"):

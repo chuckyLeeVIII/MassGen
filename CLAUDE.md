@@ -3,7 +3,7 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 <!-- OPENSPEC:START -->
-# OpenSpec Instructions
+## OpenSpec Instructions
 
 These instructions are for AI assistants working in this project.
 
@@ -23,6 +23,8 @@ Keep this managed block so 'openspec update' can refresh the instructions.
 
 ## Planning
 When planning or creating specs, use AskUserQuestions to ensure you align with the user before creating full planning files.
+
+Also, please add a 'What's Next' section at the end of each plan. This will let us chain plans and clear context in a smart manner.
 
 ## Instruction File Parity
 

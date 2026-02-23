@@ -1381,6 +1381,31 @@ class TestSubagentCompleteHook:
         assert result.inject is None
 
     @pytest.mark.asyncio
+    async def test_async_getter_is_awaited(self):
+        """Test hook awaits async getters (used by async MCP polling paths)."""
+        from massgen.mcp_tools.hooks import SubagentCompleteHook
+        from massgen.subagent.models import SubagentResult
+
+        hook = SubagentCompleteHook()
+        mock_result = SubagentResult.create_success(
+            subagent_id="async-subagent",
+            answer="async result",
+            workspace_path="/workspace/async-subagent",
+            execution_time_seconds=2.5,
+        )
+
+        async def async_getter():
+            return [("async-subagent", mock_result)]
+
+        hook.set_pending_results_getter(async_getter)
+
+        result = await hook.execute("some_tool", "{}")
+
+        assert result.allowed is True
+        assert result.inject is not None
+        assert "async-subagent" in result.inject["content"]
+
+    @pytest.mark.asyncio
     async def test_single_result_injection(self):
         """Test hook injects a single completed subagent result."""
         from massgen.mcp_tools.hooks import SubagentCompleteHook

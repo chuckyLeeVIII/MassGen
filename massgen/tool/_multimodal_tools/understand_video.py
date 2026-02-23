@@ -224,7 +224,7 @@ async def _process_with_gemini(
 async def _process_with_openai(
     video_path: Path,
     prompt: str,
-    model: str = "gpt-4.1",
+    model: str = "gpt-5.2",
     num_frames: int = 8,
 ) -> str:
     """
@@ -388,7 +388,7 @@ async def _process_with_grok(
 async def _process_with_openrouter(
     video_path: Path,
     prompt: str,
-    model: str = "openai/gpt-4.1",
+    model: str = "openai/gpt-5.2",
     num_frames: int = 8,
 ) -> str:
     """
@@ -469,7 +469,7 @@ async def understand_video(
                    - Recommended range: 4-16 frames
         model: Model to use. If not specified, uses default from backend selector:
                - Gemini: "gemini-3-flash-preview"
-               - OpenAI: "gpt-4.1"
+               - OpenAI: "gpt-5.2"
         backend_type: Preferred backend ("gemini" or "openai"). If specified and
                       has API key, this backend is used. Otherwise falls through
                       to priority list.

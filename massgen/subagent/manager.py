@@ -2499,10 +2499,20 @@ You are a subagent spawned to work on a specific task. Your workspace is isolate
         if not state:
             return None
 
-        # Calculate elapsed time and progress
+        # Calculate elapsed time and progress.
+        # For terminal subagents, freeze elapsed at finished time/result duration.
         elapsed = 0.0
+        terminal_statuses = {"completed", "completed_but_timeout", "partial", "failed", "timeout", "cancelled"}
         if state.started_at:
-            elapsed = (datetime.now() - state.started_at).total_seconds()
+            if state.finished_at is not None:
+                elapsed = (state.finished_at - state.started_at).total_seconds()
+            elif state.result and state.result.execution_time_seconds is not None and state.status in terminal_statuses:
+                elapsed = float(state.result.execution_time_seconds)
+            else:
+                elapsed = (datetime.now() - state.started_at).total_seconds()
+            elapsed = max(0.0, elapsed)
+        elif state.result and state.result.execution_time_seconds is not None:
+            elapsed = max(0.0, float(state.result.execution_time_seconds))
 
         timeout = state.config.timeout_seconds
         progress = min(100, int(elapsed / timeout * 100)) if timeout > 0 else 0
@@ -2600,9 +2610,12 @@ You are a subagent spawned to work on a specific task. Your workspace is isolate
         phase = coordination.get("phase")
         completion_pct = coordination.get("completion_percentage")
 
-        # Derive simple status from phase
-        # If state.result exists, use its status (for completed/timeout cases)
-        if state.result:
+        # Derive simple status from phase.
+        # Preserve explicit cancellation from in-memory state even when the
+        # result payload uses a generic error status.
+        if str(state.status).lower() in {"cancelled", "canceled"}:
+            derived_status = "cancelled"
+        elif state.result:
             derived_status = state.result.status
         elif phase in ("initial_answer", "enforcement", "presentation"):
             derived_status = "running"
@@ -2785,12 +2798,20 @@ You are a subagent spawned to work on a specific task. Your workspace is isolate
             # Include full result payload for completed in-memory subagents so callers
             # can retrieve answers from list_subagents without a second fetch tool.
             if state.result:
+                result_status = state.result.status
+                # Preserve explicit cancellation from in-memory state even when
+                # the result payload uses a generic error status.
+                if str(state.status).lower() in {"cancelled", "canceled"}:
+                    result_status = "cancelled"
+                result_payload = state.result.to_dict()
+                if result_status == "cancelled":
+                    result_payload["status"] = "cancelled"
                 current_entry.update(
                     {
-                        "status": state.result.status,
+                        "status": result_status,
                         "success": state.result.success,
                         "execution_time_seconds": state.result.execution_time_seconds,
-                        "result": state.result.to_dict(),
+                        "result": result_payload,
                     },
                 )
             else:
@@ -2906,6 +2927,82 @@ You are a subagent spawned to work on a specific task. Your workspace is isolate
 
         del self._subagents[subagent_id]
         return True
+
+    async def cancel_subagent(self, subagent_id: str) -> dict[str, Any]:
+        """
+        Cancel a single running subagent.
+
+        Internal method called by the background tool delegate — not exposed
+        as a model-facing MCP tool.
+
+        Args:
+            subagent_id: ID of the subagent to cancel
+
+        Returns:
+            Dict with success status and details
+        """
+        state = self._subagents.get(subagent_id)
+        if state is None:
+            return {"success": False, "error": f"Subagent not found: {subagent_id}"}
+
+        terminal_statuses = {
+            "completed",
+            "completed_but_timeout",
+            "partial",
+            "failed",
+            "timeout",
+            "cancelled",
+            "canceled",
+            "error",
+        }
+        if state.status in terminal_statuses:
+            return {
+                "success": False,
+                "error": f"Subagent {subagent_id} already in terminal state: {state.status}",
+            }
+
+        # Cancel asyncio background task if present
+        bg_task = self._background_tasks.get(subagent_id)
+        if bg_task and not bg_task.done():
+            bg_task.cancel()
+            logger.info(f"[SubagentManager] Cancelled background task for {subagent_id}")
+
+        # Terminate subprocess if present
+        process = self._active_processes.get(subagent_id)
+        if process and process.returncode is None:
+            try:
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=5.0)
+                except TimeoutError:
+                    logger.warning(f"[SubagentManager] Force killing subagent {subagent_id}")
+                    process.kill()
+                    await process.wait()
+                logger.info(f"[SubagentManager] Terminated process for {subagent_id}")
+            except Exception as e:
+                logger.error(f"[SubagentManager] Error terminating {subagent_id}: {e}")
+
+        state.status = "cancelled"
+        if state.finished_at is None:
+            state.finished_at = datetime.now()
+        if state.result is None:
+            elapsed = 0.0
+            if state.started_at is not None:
+                elapsed = max(0.0, (state.finished_at - state.started_at).total_seconds())
+            state.result = SubagentResult.create_error(
+                subagent_id=subagent_id,
+                error="Subagent cancelled",
+                workspace_path=state.workspace_path or "",
+                execution_time_seconds=elapsed,
+            )
+        logger.info(f"[SubagentManager] Cancelled subagent {subagent_id}")
+
+        return {
+            "success": True,
+            "operation": "cancel_subagent",
+            "subagent_id": subagent_id,
+            "status": "cancelled",
+        }
 
     async def cancel_all_subagents(self) -> int:
         """

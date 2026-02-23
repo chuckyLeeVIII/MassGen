@@ -249,6 +249,7 @@ Example format:
 
 If an answer has no meaningful failures, say so explicitly — but this should be
 rare. First attempts almost always have significant gaps.
+If you cannot find meaningful failures, your review is probably too generous.
 
 ### Success Patterns
 
@@ -310,7 +311,16 @@ lead somewhere that incremental refinement never would.
 - Could a different structure, method, or creative direction for the core parts
   improve the result — even while keeping other parts that already work well?
 - Are all current answers converging on the same basic approach? If so, varying
-  has extra value — it explores paths that pure refinement misses.\""""
+  has extra value — it explores paths that pure refinement misses.
+
+### Pre-Score Audit
+
+Before you score, re-read your Failure Patterns section. For EACH criterion:
+- Name the single biggest remaining weakness. If you wrote "no meaningful failures"
+  for any criterion, reconsider — what would a harsh critic say?
+- Ask: "If I gave this to someone with high standards, what would they complain about?"
+- Your score for each criterion should reflect the severity of that biggest weakness,
+  not the average of strengths and weaknesses.\""""
 
 
 def _build_changedoc_checklist_analysis() -> str:
@@ -450,7 +460,16 @@ somewhere that incremental refinement of existing decisions never would?
   has extra value — it explores decision paths that pure refinement misses.
 - Could challenging a core assumption in the changedoc unlock a better outcome?
 - Could FEWER decisions produce a better result? Quality often comes from restraint —
-  removing weak decisions can strengthen the overall answer more than adding new ones.\""""
+  removing weak decisions can strengthen the overall answer more than adding new ones.
+
+### Pre-Score Audit
+
+Before you score, re-read your Failure Patterns section. For EACH criterion:
+- Name the single biggest remaining weakness. If you wrote "no meaningful failures"
+  for any criterion, reconsider — what would a harsh critic say?
+- Ask: "If I gave this to someone with high standards, what would they complain about?"
+- Your score for each criterion should reflect the severity of that biggest weakness,
+  not the average of strengths and weaknesses.\""""
 
 
 def _build_checklist_decision(
@@ -575,15 +594,22 @@ Based on your analysis, rate your confidence (0-10) in each of the following
 statements. 0 = completely disagree, 10 = fully agree, no reservations.
 
 Calibrate your scores against these anchors:
-- **9-10**: Essentially perfect. A skilled expert would struggle to improve this.
-- **7-8**: Strong but with clear gaps. Good work with room for meaningful improvement.
-- **5-6**: Adequate. Meets basic requirements but falls short of impressive.
-- **3-4**: Significant weaknesses. Important elements are missing or poorly executed.
-- **1-2**: Fundamental problems. Does not adequately address the requirement.
+- **9-10**: Near-flawless. An expert reviewer would find only cosmetic nitpicks.
+  This score is rare and must be justified by the absence of any meaningful gap.
+- **7-8**: Solid execution with notable gaps. A demanding user would identify
+  specific things they wish were better. Most good first attempts land here.
+- **5-6**: Functional but mediocre. Meets the literal request but lacks depth,
+  polish, or thoughtfulness. A user would say "okay, but I expected more."
+- **3-4**: Weak. Key requirements are missing or poorly handled. The output
+  needs significant rework, not just polish.
+- **1-2**: Broken or fundamentally off-target. Does not meaningfully address
+  the request.
 
-First attempts rarely score above 7. A score above 8 requires that your
-critique (above) found only minor issues. If your critique identified significant
-flaws but your scores are above 8, one of them is wrong.
+First attempts almost never deserve above 7. Subsequent iterations that address
+only incremental changes should not score higher than the previous round.
+A score of 8+ requires your diagnostic analysis found only minor polish issues.
+If your analysis identified ANY structural or significant gaps but your scores
+are 8+, your scores are inflated — lower them to match your analysis.
 
 {numbered}
 
@@ -697,15 +723,22 @@ Depth, features, polish, and richness all count — they are never "beyond scope
 Rate your confidence (0-10) in each of the following statements.
 0 = completely disagree, 10 = fully agree, no reservations.
 Calibrate your scores against these anchors:
-- **9-10**: Essentially perfect. A skilled expert would struggle to improve this.
-- **7-8**: Strong but with clear gaps. Good work with room for meaningful improvement.
-- **5-6**: Adequate. Meets basic requirements but falls short of impressive.
-- **3-4**: Significant weaknesses. Important elements are missing or poorly executed.
-- **1-2**: Fundamental problems. Does not adequately address the requirement.
+- **9-10**: Near-flawless. An expert reviewer would find only cosmetic nitpicks.
+  This score is rare and must be justified by the absence of any meaningful gap.
+- **7-8**: Solid execution with notable gaps. A demanding user would identify
+  specific things they wish were better. Most good first attempts land here.
+- **5-6**: Functional but mediocre. Meets the literal request but lacks depth,
+  polish, or thoughtfulness. A user would say "okay, but I expected more."
+- **3-4**: Weak. Key requirements are missing or poorly handled. The output
+  needs significant rework, not just polish.
+- **1-2**: Broken or fundamentally off-target. Does not meaningfully address
+  the request.
 
-First attempts rarely score above 7. A score above 8 requires that your
-critique (above) found only minor issues. If your critique identified significant
-flaws but your scores are above 8, one of them is wrong.
+First attempts almost never deserve above 7. Subsequent iterations that address
+only incremental changes should not score higher than the previous round.
+A score of 8+ requires your diagnostic analysis found only minor polish issues.
+If your analysis identified ANY structural or significant gaps but your scores
+are 8+, your scores are inflated — lower them to match your analysis.
 
 {numbered}
 

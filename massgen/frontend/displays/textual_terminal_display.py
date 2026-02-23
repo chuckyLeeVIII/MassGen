@@ -245,6 +245,39 @@ def _parse_spawn_subagents_args(args_payload: Any) -> dict[str, Any] | None:
     return None
 
 
+def _is_start_background_tool_name(tool_name: Any) -> bool:
+    """Return True when tool_name is the background start lifecycle tool."""
+    return str(tool_name or "").lower().endswith("start_background_tool")
+
+
+def _extract_spawn_subagents_args_for_tool(
+    tool_name: Any,
+    args_payload: Any,
+) -> dict[str, Any] | None:
+    """Extract spawn_subagents arguments from direct or wrapper tool payloads."""
+    parsed = _parse_spawn_subagents_args(args_payload)
+    if not isinstance(parsed, dict):
+        return None
+
+    if isinstance(parsed.get("tasks"), list):
+        return parsed
+
+    if not _is_start_background_tool_name(tool_name):
+        return parsed
+
+    target_tool = str(parsed.get("tool_name") or parsed.get("tool") or "").strip().lower()
+    if "spawn_subagent" not in target_tool:
+        return parsed
+
+    nested_raw = parsed.get("arguments", parsed.get("args"))
+    nested = _parse_spawn_subagents_args(nested_raw)
+    if isinstance(nested, dict):
+        return nested
+
+    merged = {key: value for key, value in parsed.items() if key not in {"tool_name", "tool", "arguments", "args"}}
+    return merged if isinstance(merged.get("tasks"), list) else parsed
+
+
 def _extract_spawned_subagents(result_text: Any) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     """Return normalized spawn_subagents payload plus extracted subagent entries."""
     result_data = _parse_spawn_subagents_result(result_text)
@@ -302,6 +335,8 @@ def _map_subagent_status(raw_status: Any, completion_percentage: int | None = No
         return "timeout", max(0, min(int(progress), 100))
     if status in {"failed", "error"}:
         return "failed", 0
+    if status in {"cancelled", "canceled", "stopped"}:
+        return "canceled", 0
     if status in {"pending"}:
         return "pending", 0
     return "running", 0
@@ -317,6 +352,36 @@ def _count_workspace_files(workspace_path: str) -> int:
         return sum(1 for path in workspace.rglob("*") if path.is_file())
     except Exception:
         return 0
+
+
+def _read_subagent_reference_error(log_path: Any) -> str | None:
+    """Read terminal error details from subagent subprocess reference logs."""
+    if not log_path:
+        return None
+
+    try:
+        base = Path(str(log_path))
+    except Exception:
+        return None
+
+    if base.is_file():
+        base = base.parent
+
+    ref_file = base / "subprocess_logs.json"
+    if not ref_file.exists() or not ref_file.is_file():
+        return None
+
+    try:
+        payload = json.loads(ref_file.read_text())
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+
+    error = payload.get("error")
+    if isinstance(error, str):
+        error = error.strip()
+        if error:
+            return error
+    return None
 
 
 def _normalize_subagent_context_paths(raw_paths: Any) -> list[str]:
@@ -371,10 +436,28 @@ def _build_subagent_display_data(
     workspace_path = str(sa_data.get("workspace") or (existing.workspace_path if existing else ""))
     timeout_seconds = float(sa_data.get("timeout_seconds") or (existing.timeout_seconds if existing else 300))
     elapsed_seconds = float(sa_data.get("execution_time_seconds") or (existing.elapsed_seconds if existing else 0.0))
-    error = sa_data.get("error") or (existing.error if existing else None)
+    log_path = sa_data.get("log_path") or (existing.log_path if existing else None)
+
+    error = sa_data.get("error")
+    if not error and existing:
+        error = existing.error
+    if not error:
+        raw_status = str(sa_data.get("status") or "").lower().strip()
+        terminal_raw_statuses = {
+            "failed",
+            "error",
+            "timeout",
+            "completed_but_timeout",
+            "partial",
+            "cancelled",
+            "canceled",
+            "stopped",
+        }
+        if display_status in {"failed", "timeout", "canceled"} or raw_status in terminal_raw_statuses:
+            error = _read_subagent_reference_error(log_path)
+
     answer = sa_data.get("answer")
     answer_preview = ((answer or "")[:200] if answer else None) or (existing.answer_preview if existing else None)
-    log_path = sa_data.get("log_path") or (existing.log_path if existing else None)
     raw_context_paths = sa_data.get("context_paths")
     if raw_context_paths is None and existing is not None:
         raw_context_paths = getattr(existing, "context_paths", [])
@@ -6254,6 +6337,9 @@ Type your question and press Enter to ask the agents.
                 "timeout": "timeout",
                 "failed": "failed",
                 "error": "error",
+                "cancelled": "canceled",
+                "canceled": "canceled",
+                "stopped": "canceled",
             }
             normalized_status = status_map.get((status or "").lower(), "failed")
 
@@ -6270,7 +6356,7 @@ Type your question and press Enter to ask the agents.
                         id=existing.id,
                         task=existing.task,
                         status=normalized_status,
-                        progress_percent=100 if normalized_status in ("completed", "timeout", "failed", "error") else existing.progress_percent,
+                        progress_percent=100 if normalized_status in ("completed", "timeout", "failed", "error", "canceled") else existing.progress_percent,
                         elapsed_seconds=existing.elapsed_seconds,
                         timeout_seconds=existing.timeout_seconds,
                         workspace_path=existing.workspace_path,
@@ -6282,7 +6368,7 @@ Type your question and press Enter to ask the agents.
                         context_paths=list(getattr(existing, "context_paths", []) or []),
                     )
 
-                if call_id == pc_state.call_id and normalized_status in ("completed", "timeout", "failed", "error"):
+                if call_id == pc_state.call_id and normalized_status in ("completed", "timeout", "failed", "error", "canceled"):
                     pc_state.call_id = None
                     pc_state.agent_id = None
                 return
@@ -6318,7 +6404,7 @@ Type your question and press Enter to ask the agents.
             if existing is None:
                 return
 
-            final_progress = 100 if normalized_status in ("completed", "timeout", "failed", "error") else existing.progress_percent
+            final_progress = 100 if normalized_status in ("completed", "timeout", "failed", "error", "canceled") else existing.progress_percent
             updated = SubagentDisplayData(
                 id=existing.id,
                 task=existing.task,
@@ -6337,7 +6423,7 @@ Type your question and press Enter to ask the agents.
             card.update_subagent(subagent_id, updated)
 
             # Clear call ownership on terminal status for any pre-collab state.
-            if normalized_status in ("completed", "timeout", "failed", "error"):
+            if normalized_status in ("completed", "timeout", "failed", "error", "canceled"):
                 for pc_state in self._precollab_subagents.values():
                     if call_id == pc_state.call_id:
                         pc_state.call_id = None
@@ -9322,6 +9408,62 @@ Type your question and press Enter to ask the agents.
                 cache["entries"] = entries
                 return entries
 
+            def _lookup_known_background_status(subagent_id: str) -> str | None:
+                panel = self.agent_widgets.get(agent_id)
+                if panel is None:
+                    return None
+
+                timeline = None
+                get_timeline = getattr(panel, "_get_timeline", None)
+                if callable(get_timeline):
+                    try:
+                        timeline = get_timeline()
+                    except Exception:
+                        timeline = None
+                if timeline is None:
+                    return None
+
+                collect_known = getattr(timeline, "_collect_known_background_statuses", None)
+                if not callable(collect_known):
+                    return None
+
+                try:
+                    statuses = collect_known() or {}
+                except Exception:
+                    return None
+                if not isinstance(statuses, dict):
+                    return None
+
+                status = statuses.get(subagent_id)
+                if status is None:
+                    status = statuses.get(str(subagent_id))
+                if status is None:
+                    return None
+
+                normalized = str(status).lower().strip()
+                return normalized or None
+
+            def _lookup_background_history_entry(subagent_id: str) -> dict[str, Any] | None:
+                panel = self.agent_widgets.get(agent_id)
+                if panel is None:
+                    return None
+                history_fn = getattr(panel, "_get_background_tool_history", None)
+                if not callable(history_fn):
+                    return None
+                try:
+                    history_items = history_fn() or []
+                except Exception:
+                    return None
+                for item in history_items:
+                    if not isinstance(item, dict):
+                        continue
+                    candidate_id = str(item.get("async_id") or item.get("job_id") or item.get("subagent_id") or "").strip()
+                    if not candidate_id:
+                        continue
+                    if candidate_id == subagent_id:
+                        return item
+                return None
+
             def _status_callback(subagent_id: str) -> SubagentDisplayData | None:
                 latest = live_callback(subagent_id)
                 if latest and latest.status not in {"running", "pending"}:
@@ -9329,7 +9471,47 @@ Type your question and press Enter to ask the agents.
 
                 entry = _load_entries().get(subagent_id)
                 if not entry:
-                    return latest
+                    known_status = _lookup_known_background_status(subagent_id)
+                    if known_status and known_status not in {"running", "pending", "background", "queued"}:
+                        baseline = latest or by_id.get(subagent_id)
+                        merged = _build_subagent_display_data(
+                            {
+                                "subagent_id": subagent_id,
+                                "status": known_status,
+                            },
+                            baseline,
+                        )
+                        by_id[subagent_id] = merged
+                        return merged
+
+                    history_entry = _lookup_background_history_entry(subagent_id)
+                    if not history_entry:
+                        return latest
+
+                    history_status = str(history_entry.get("latest_status") or history_entry.get("status") or "").lower().strip()
+                    if history_status in {"running", "pending", "background", "queued"} or not history_status:
+                        return latest
+                    if history_status in {"cancelled", "canceled", "stopped"}:
+                        history_status = "canceled"
+
+                    history_payload: dict[str, Any] = {
+                        "subagent_id": subagent_id,
+                        "status": history_status,
+                    }
+                    result_payload = history_entry.get("result")
+                    if isinstance(result_payload, str) and result_payload:
+                        if history_status in {"failed", "error", "timeout", "canceled"}:
+                            history_payload["error"] = result_payload
+                        else:
+                            history_payload["answer"] = result_payload
+                    error_payload = history_entry.get("error")
+                    if isinstance(error_payload, str) and error_payload:
+                        history_payload["error"] = error_payload
+
+                    baseline = latest or by_id.get(subagent_id)
+                    merged = _build_subagent_display_data(history_payload, baseline)
+                    by_id[subagent_id] = merged
+                    return merged
 
                 # Ignore non-terminal file entries when we already have a live snapshot.
                 entry_status = str(entry.get("status", "")).lower()
@@ -12119,7 +12301,7 @@ Type your question and press Enter to ask the agents.
 
             return is_planning_tool(tool_name)
 
-        def _is_subagent_tool(self, tool_name: str) -> bool:
+        def _is_subagent_tool(self, tool_name: str, args_payload: Any | None = None) -> bool:
             """Check if a tool is a subagent tool (should show SubagentCard instead of tool card).
 
             Args:
@@ -12132,8 +12314,20 @@ Type your question and press Enter to ask the agents.
                 "spawn_subagents",
                 "spawn_subagent",
             ]
-            tool_lower = tool_name.lower()
-            return any(st in tool_lower for st in subagent_tools)
+            tool_lower = str(tool_name or "").lower()
+            if any(st in tool_lower for st in subagent_tools):
+                return True
+
+            if _is_start_background_tool_name(tool_name):
+                args_data = _extract_spawn_subagents_args_for_tool(tool_name, args_payload)
+                if isinstance(args_data, dict):
+                    target_tool = str(args_data.get("tool_name") or args_data.get("tool") or "").lower()
+                    if any(st in target_tool for st in subagent_tools):
+                        return True
+                    if isinstance(args_data.get("tasks"), list):
+                        return True
+
+            return False
 
         def _show_subagent_card_from_args(
             self,
@@ -12176,7 +12370,10 @@ Type your question and press Enter to ask the agents.
                 tui_log("_show_subagent_card_from_args: no args_full")
                 return
 
-            args_data = _parse_spawn_subagents_args(args)
+            args_data = _extract_spawn_subagents_args_for_tool(
+                getattr(tool_data, "tool_name", ""),
+                args,
+            )
             if args_data is None:
                 tui_log(f"_show_subagent_card_from_args: failed to parse args: {str(args)[:100]}")
                 return
@@ -12340,8 +12537,12 @@ Type your question and press Enter to ask the agents.
             """
             # Check if tool name matches a subagent tool
             tool_name = tool_data.tool_name.lower()
-            tui_log(f"_check_and_display_subagent_card: tool_name={tool_name}, is_subagent={self._is_subagent_tool(tool_name)}")
-            if not self._is_subagent_tool(tool_name):
+            is_subagent_tool = self._is_subagent_tool(
+                tool_name,
+                getattr(tool_data, "args_full", None),
+            )
+            tui_log(f"_check_and_display_subagent_card: tool_name={tool_name}, is_subagent={is_subagent_tool}")
+            if not is_subagent_tool:
                 return
 
             _, spawned = _extract_spawned_subagents(tool_data.result_full)

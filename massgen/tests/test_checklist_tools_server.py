@@ -1150,6 +1150,150 @@ class TestTaskPlanCommitmentTracking:
         assert "task plan" in lower or "task list" in lower
 
 
+class TestNoveltySubagentGuidance:
+    """Tests for novelty subagent spawning guidance in iterate verdicts."""
+
+    def _make_t0_state(self, **overrides):
+        """Helper: state dict for T=0 iterate scenario."""
+        state = {
+            "terminate_action": "vote",
+            "iterate_action": "new_answer",
+            "has_existing_answers": True,
+            "required": 4,
+            "cutoff": 7,
+            "require_substantiveness": True,
+            "novelty_subagent_enabled": True,
+        }
+        state.update(overrides)
+        return state
+
+    def _t0_substantiveness(self):
+        """Helper: substantiveness with T=0."""
+        return {
+            "transformative": [],
+            "structural": [],
+            "incremental": ["fix spacing", "adjust colors"],
+            "decision_space_exhausted": False,
+            "notes": "Only incremental work identified",
+        }
+
+    def test_novelty_guidance_when_t0_and_has_existing_answers(self):
+        """When T=0, iterate verdict, novelty enabled, and has_existing_answers: explanation contains novelty subagent guidance."""
+        items = ["Check 1", "Check 2", "Check 3", "Check 4"]
+        result = evaluate_checklist_submission(
+            scores={
+                "E1": {"score": 6, "reasoning": "gaps"},
+                "E2": {"score": 5, "reasoning": "weak"},
+                "E3": {"score": 7, "reasoning": "ok"},
+                "E4": {"score": 5, "reasoning": "shallow"},
+            },
+            improvements="Minor polish and formatting",
+            report_path="",
+            items=items,
+            state=self._make_t0_state(),
+            substantiveness=self._t0_substantiveness(),
+        )
+        assert result["verdict"] == "new_answer"
+        explanation_lower = result["explanation"].lower()
+        assert "novelty" in explanation_lower
+        assert "subagent" in explanation_lower
+        assert "background" in explanation_lower
+
+    def test_no_novelty_guidance_when_transformative_exists(self):
+        """When T>0, no novelty subagent guidance needed (agent already has transformative ideas)."""
+        items = ["Check 1", "Check 2", "Check 3", "Check 4"]
+        result = evaluate_checklist_submission(
+            scores={
+                "E1": {"score": 6, "reasoning": "gaps"},
+                "E2": {"score": 5, "reasoning": "weak"},
+                "E3": {"score": 7, "reasoning": "ok"},
+                "E4": {"score": 5, "reasoning": "shallow"},
+            },
+            improvements="Major rework needed",
+            report_path="",
+            items=items,
+            state=self._make_t0_state(),
+            substantiveness={
+                "transformative": ["rewrite as event-driven architecture"],
+                "structural": [],
+                "incremental": [],
+                "decision_space_exhausted": False,
+                "notes": "One transformative change",
+            },
+        )
+        assert result["verdict"] == "new_answer"
+        explanation_lower = result["explanation"].lower()
+        assert "novelty" not in explanation_lower or "subagent" not in explanation_lower
+
+    def test_no_novelty_guidance_on_first_answer(self):
+        """When first answer (no existing), no novelty subagent guidance."""
+        items = ["Check 1", "Check 2"]
+        state = {
+            "terminate_action": "vote",
+            "iterate_action": "new_answer",
+            "has_existing_answers": False,
+            "required": 2,
+            "cutoff": 7,
+            "novelty_subagent_enabled": True,
+        }
+        result = evaluate_checklist_submission(
+            scores={"E1": {"score": 10, "reasoning": "perfect"}, "E2": {"score": 10, "reasoning": "perfect"}},
+            improvements="",
+            report_path="",
+            items=items,
+            state=state,
+        )
+        assert result["verdict"] == "new_answer"
+        assert "novelty" not in result["explanation"].lower()
+
+    def test_no_novelty_guidance_when_disabled(self):
+        """When novelty_subagent_enabled=False, novelty guidance is suppressed even with T=0."""
+        items = ["Check 1", "Check 2", "Check 3", "Check 4"]
+        result = evaluate_checklist_submission(
+            scores={
+                "E1": {"score": 6, "reasoning": "gaps"},
+                "E2": {"score": 5, "reasoning": "weak"},
+                "E3": {"score": 7, "reasoning": "ok"},
+                "E4": {"score": 5, "reasoning": "shallow"},
+            },
+            improvements="Minor polish",
+            report_path="",
+            items=items,
+            state=self._make_t0_state(novelty_subagent_enabled=False),
+            substantiveness=self._t0_substantiveness(),
+        )
+        assert result["verdict"] == "new_answer"
+        assert "novelty" not in result["explanation"].lower()
+
+    def test_no_novelty_guidance_when_key_absent(self):
+        """When novelty_subagent_enabled absent from state, default OFF (safe)."""
+        items = ["Check 1", "Check 2", "Check 3", "Check 4"]
+        state = {
+            "terminate_action": "vote",
+            "iterate_action": "new_answer",
+            "has_existing_answers": True,
+            "required": 4,
+            "cutoff": 7,
+            "require_substantiveness": True,
+            # No novelty_subagent_enabled key
+        }
+        result = evaluate_checklist_submission(
+            scores={
+                "E1": {"score": 6, "reasoning": "gaps"},
+                "E2": {"score": 5, "reasoning": "weak"},
+                "E3": {"score": 7, "reasoning": "ok"},
+                "E4": {"score": 5, "reasoning": "shallow"},
+            },
+            improvements="Minor polish",
+            report_path="",
+            items=items,
+            state=state,
+            substantiveness=self._t0_substantiveness(),
+        )
+        assert result["verdict"] == "new_answer"
+        assert "novelty" not in result["explanation"].lower()
+
+
 class TestBuildServerConfig:
     """Tests for build_server_config utility."""
 

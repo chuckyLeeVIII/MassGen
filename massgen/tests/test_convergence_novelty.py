@@ -274,17 +274,17 @@ class TestScoreCalibration:
         assert "3-4" in decision
         assert "1-2" in decision
 
-    def test_gated_decision_has_first_attempts_rarely(self):
-        """Gated decision must warn that first attempts rarely score above 70%."""
+    def test_gated_decision_has_first_attempts_warning(self):
+        """Gated decision must warn that first attempts almost never deserve above 7."""
         decision = _build_checklist_gated_decision(_CHECKLIST_ITEMS_CHANGEDOC)
-        assert "First attempts rarely score above 7" in decision
+        assert "First attempts almost never deserve above 7" in decision
 
-    def test_gated_decision_has_critique_score_consistency(self):
-        """Gated decision must include critique-vs-score consistency check."""
+    def test_gated_decision_has_analysis_score_consistency(self):
+        """Gated decision must include analysis-vs-score consistency check."""
         decision = _build_checklist_gated_decision(_CHECKLIST_ITEMS_CHANGEDOC)
         lower = decision.lower()
-        assert "critique" in lower
-        assert "one of them is wrong" in lower
+        assert "diagnostic analysis" in lower
+        assert "scores are inflated" in lower
 
     def test_scored_decision_has_calibration_anchors(self):
         """Scored decision must also include calibration anchor text."""
@@ -380,3 +380,133 @@ class TestRecalibration:
         recal_pos = analysis.index("distance in mind")
         subst_pos = analysis.index("Substantiveness")
         assert goal_pos < recal_pos < subst_pos
+
+
+# ---------------------------------------------------------------------------
+# Anti-Glazing / Score Calibration
+# ---------------------------------------------------------------------------
+
+
+class TestAntiGlazing:
+    """Tests for anti-glazing calibration language in scoring prompts."""
+
+    def test_scored_decision_has_harsh_anchors(self):
+        """Scored decision must use the stricter calibration anchors."""
+        decision = _build_checklist_scored_decision(
+            threshold=5,
+            remaining=3,
+            total=5,
+            checklist_items=_CHECKLIST_ITEMS_CHANGEDOC,
+        )
+        assert "Near-flawless" in decision
+        assert "rare and must be justified" in decision
+        assert "Most good first attempts land here" in decision
+
+    def test_gated_decision_has_harsh_anchors(self):
+        """Gated decision must use the stricter calibration anchors."""
+        decision = _build_checklist_gated_decision(_CHECKLIST_ITEMS_CHANGEDOC)
+        assert "Near-flawless" in decision
+        assert "rare and must be justified" in decision
+        assert "Most good first attempts land here" in decision
+
+    def test_checklist_analysis_has_too_generous_warning(self):
+        """Non-changedoc checklist analysis must include 'too generous' warning."""
+        analysis = _build_checklist_analysis()
+        assert "too generous" in analysis
+
+    def test_changedoc_analysis_has_too_generous_warning(self):
+        """Changedoc analysis must still include 'too generous' warning."""
+        analysis = _build_changedoc_checklist_analysis()
+        assert "too generous" in analysis
+
+    def test_checklist_analysis_has_pre_score_audit(self):
+        """Non-changedoc analysis must include Pre-Score Audit section."""
+        analysis = _build_checklist_analysis()
+        assert "Pre-Score Audit" in analysis
+        assert "biggest remaining weakness" in analysis
+
+    def test_changedoc_analysis_has_pre_score_audit(self):
+        """Changedoc analysis must include Pre-Score Audit section."""
+        analysis = _build_changedoc_checklist_analysis()
+        assert "Pre-Score Audit" in analysis
+        assert "biggest remaining weakness" in analysis
+
+    def test_scored_decision_has_inflated_warning(self):
+        """Scored decision must warn about inflated scores."""
+        decision = _build_checklist_scored_decision(
+            threshold=5,
+            remaining=3,
+            total=5,
+            checklist_items=_CHECKLIST_ITEMS_CHANGEDOC,
+        )
+        assert "scores are inflated" in decision
+
+    def test_gated_decision_has_inflated_warning(self):
+        """Gated decision must warn about inflated scores."""
+        decision = _build_checklist_gated_decision(_CHECKLIST_ITEMS_CHANGEDOC)
+        assert "scores are inflated" in decision
+
+    def test_pre_score_audit_after_fresh_approach(self):
+        """Pre-Score Audit must appear after Fresh Approach in non-changedoc analysis."""
+        analysis = _build_checklist_analysis()
+        fresh_pos = analysis.index("Fresh Approach")
+        audit_pos = analysis.index("Pre-Score Audit")
+        assert fresh_pos < audit_pos
+
+    def test_pre_score_audit_after_fresh_approach_changedoc(self):
+        """Pre-Score Audit must appear after Fresh Approach in changedoc analysis."""
+        analysis = _build_changedoc_checklist_analysis()
+        fresh_pos = analysis.index("Fresh Approach")
+        audit_pos = analysis.index("Pre-Score Audit")
+        assert fresh_pos < audit_pos
+
+
+# ---------------------------------------------------------------------------
+# Novelty Subagent Type
+# ---------------------------------------------------------------------------
+
+
+class TestNoveltySubagentType:
+    """Tests for the novelty subagent type definition."""
+
+    def test_novelty_subagent_md_exists(self):
+        """massgen/subagent_types/novelty/SUBAGENT.md must exist."""
+        from pathlib import Path
+
+        subagent_md = Path(__file__).parent.parent / "subagent_types" / "novelty" / "SUBAGENT.md"
+        assert subagent_md.exists(), f"Expected {subagent_md} to exist"
+
+    def test_novelty_subagent_has_valid_yaml_frontmatter(self):
+        """SUBAGENT.md must have valid YAML frontmatter with required fields."""
+        from pathlib import Path
+
+        import yaml
+
+        subagent_md = Path(__file__).parent.parent / "subagent_types" / "novelty" / "SUBAGENT.md"
+        content = subagent_md.read_text()
+
+        # Must start with YAML frontmatter
+        assert content.startswith("---"), "SUBAGENT.md must start with YAML frontmatter"
+        end = content.index("---", 3)
+        frontmatter = yaml.safe_load(content[3:end])
+
+        assert frontmatter["name"] == "novelty"
+        assert "description" in frontmatter
+        assert "expected_input" in frontmatter
+
+    def test_novelty_subagent_instructions_contain_key_elements(self):
+        """SUBAGENT.md body must contain key instruction elements."""
+        from pathlib import Path
+
+        subagent_md = Path(__file__).parent.parent / "subagent_types" / "novelty" / "SUBAGENT.md"
+        content = subagent_md.read_text().lower()
+
+        # Must instruct transformative alternatives, not incremental
+        assert "transformative" in content
+        assert "incremental" in content
+        # Must mention breaking plateaus or stalling
+        assert "plateau" in content or "stall" in content or "anchor" in content
+        # Must propose multiple directions
+        assert "direction" in content or "alternative" in content
+        # Must explain WHY, not just WHAT
+        assert "why" in content

@@ -6,6 +6,7 @@ import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 from textual.app import App, ComposeResult
 
@@ -102,6 +103,36 @@ class _SpawnPanel:
         if selector == "#timeline":
             return self._timeline
         raise LookupError(selector)
+
+
+class _HistoryPanel:
+    def __init__(self, history: list[dict[str, Any]]) -> None:
+        self._history = history
+
+    def _get_background_tool_history(self) -> list[dict[str, Any]]:
+        return list(self._history)
+
+    def query(self, _cls):  # noqa: ANN001 - Textual query compat
+        return []
+
+
+class _KnownStatusTimeline:
+    def __init__(self, statuses: dict[str, str]) -> None:
+        self._statuses = statuses
+
+    def _collect_known_background_statuses(self) -> dict[str, str]:
+        return dict(self._statuses)
+
+
+class _KnownStatusPanel:
+    def __init__(self, timeline: _KnownStatusTimeline) -> None:
+        self._timeline = timeline
+
+    def _get_timeline(self) -> _KnownStatusTimeline:
+        return self._timeline
+
+    def query(self, _cls):  # noqa: ANN001 - Textual query compat
+        return []
 
 
 class _ExistingSubagentCard:
@@ -274,6 +305,33 @@ def test_build_subagent_display_data_preserves_existing_context_paths() -> None:
     assert getattr(updated, "context_paths", None) == ["docs/brief.md"]
 
 
+def test_build_subagent_display_data_reads_subprocess_reference_error(tmp_path) -> None:
+    """Terminal refreshes should surface subprocess reference errors for display."""
+    log_dir = tmp_path / "subagent_logs" / "remote_evaluator"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    (log_dir / "subprocess_logs.json").write_text(
+        json.dumps(
+            {
+                "subagent_id": "remote_evaluator",
+                "error": "Subagent cancelled",
+            },
+        ),
+    )
+
+    existing = _make_subagent("remote_evaluator", status="running")
+    existing.log_path = str(log_dir)
+
+    updated = textual_display_module._build_subagent_display_data(
+        {
+            "subagent_id": "remote_evaluator",
+            "status": "failed",
+        },
+        existing,
+    )
+
+    assert updated.error == "Subagent cancelled"
+
+
 def test_show_subagent_card_from_args_respects_round_number() -> None:
     """Fallback subagent card path should place cards in the active round."""
     panel_cls = textual_display_module.AgentPanel
@@ -299,6 +357,40 @@ def test_show_subagent_card_from_args_respects_round_number() -> None:
 
     assert timeline.added_round_number == 4
     assert isinstance(timeline.added_card, SubagentCard)
+
+
+def test_show_subagent_card_from_args_accepts_start_background_wrapper_payload() -> None:
+    """Wrapper start_background_tool payloads targeting spawn_subagents should still render SubagentCard."""
+    panel_cls = textual_display_module.AgentPanel
+    panel = panel_cls.__new__(panel_cls)
+    panel.agent_id = "agent_a"
+
+    timeline = _ArgsTimeline()
+    tool_data = SimpleNamespace(
+        tool_id="call:subagent.wrapper",
+        tool_name="custom_tool__start_background_tool",
+        args_full=json.dumps(
+            {
+                "tool_name": "mcp__subagent_agent_a__spawn_subagents",
+                "arguments": {
+                    "tasks": [
+                        {
+                            "subagent_id": "jazz_researcher",
+                            "task": "Research jazz history",
+                        },
+                    ],
+                    "background": False,
+                },
+            },
+        ),
+    )
+
+    assert panel._is_subagent_tool(tool_data.tool_name, tool_data.args_full) is True
+    panel._show_subagent_card_from_args(tool_data, timeline, round_number=2)
+
+    assert timeline.added_round_number == 2
+    assert isinstance(timeline.added_card, SubagentCard)
+    assert timeline.added_card.subagents[0].id == "jazz_researcher"
 
 
 def test_spawn_status_callback_uses_spawn_status_file_when_tool_result_is_missing(tmp_path):
@@ -350,6 +442,58 @@ def test_spawn_status_callback_uses_spawn_status_file_when_tool_result_is_missin
     assert updated is not None
     assert updated.status == "completed"
     assert updated.answer_preview == "# Final evaluator report"
+
+
+def test_spawn_status_callback_uses_background_history_on_cancel() -> None:
+    """When _spawn_status.json is missing, background history should mark cancellation."""
+    app_cls = textual_display_module.TextualApp
+    app = app_cls.__new__(app_cls)
+    history_entry = {
+        "async_id": "remote_evaluator",
+        "latest_status": "cancelled",
+        "is_active": False,
+        "result": "Cancelled by user",
+    }
+    panel = _HistoryPanel([history_entry])
+    app.agent_widgets = {"agent_a": panel}
+    app.coordination_display = SimpleNamespace(orchestrator=SimpleNamespace(agents={}))
+
+    initial = _make_subagent(
+        "remote_evaluator",
+        status="running",
+        task="re-evaluate asynchronous path",
+        timeout_seconds=300.0,
+    )
+
+    callback = app._build_spawn_status_callback("agent_a", [initial])
+    updated = callback("remote_evaluator")
+
+    assert updated is not None
+    assert updated.status == "canceled"
+    assert updated.error == "Cancelled by user"
+
+
+def test_spawn_status_callback_uses_known_background_statuses_without_history() -> None:
+    """Terminal statuses from timeline payloads should update spawn cards."""
+    app_cls = textual_display_module.TextualApp
+    app = app_cls.__new__(app_cls)
+    timeline = _KnownStatusTimeline({"remote_evaluator": "cancelled"})
+    panel = _KnownStatusPanel(timeline)
+    app.agent_widgets = {"agent_a": panel}
+    app.coordination_display = SimpleNamespace(orchestrator=SimpleNamespace(agents={}))
+
+    initial = _make_subagent(
+        "remote_evaluator",
+        status="running",
+        task="monitor cancellation wiring",
+        timeout_seconds=300.0,
+    )
+
+    callback = app._build_spawn_status_callback("agent_a", [initial])
+    updated = callback("remote_evaluator")
+
+    assert updated is not None
+    assert updated.status == "canceled"
 
 
 def test_running_progress_bar_caps_at_99_percent() -> None:

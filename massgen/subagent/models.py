@@ -616,7 +616,17 @@ class SubagentState:
     """
 
     config: SubagentConfig
-    status: Literal["pending", "running", "completed", "completed_but_timeout", "partial", "failed", "timeout"] = "pending"
+    status: Literal[
+        "pending",
+        "running",
+        "completed",
+        "completed_but_timeout",
+        "partial",
+        "failed",
+        "timeout",
+        "cancelled",
+        "error",
+    ] = "pending"
     workspace_path: str = ""
     started_at: datetime | None = None
     finished_at: datetime | None = None
@@ -652,13 +662,13 @@ class SubagentDisplayData:
         workspace_path: Path to subagent workspace directory
         workspace_file_count: Number of files in workspace
         last_log_line: Most recent log line for activity display
-        error: Error message if status is error/failed
+        error: Error message if status is error/failed/canceled
         answer_preview: First ~100 chars of answer if completed
     """
 
     id: str
     task: str
-    status: Literal["pending", "running", "completed", "error", "timeout", "failed"]
+    status: Literal["pending", "running", "completed", "error", "timeout", "failed", "canceled"]
     progress_percent: int  # 0-100, based on elapsed/timeout
     elapsed_seconds: float
     timeout_seconds: float

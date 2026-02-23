@@ -280,7 +280,7 @@ class TestSubagentMcpConfigEnv:
         # Ensure specialized-subagents temp file is created.
         monkeypatch.setattr(
             "massgen.subagent.type_scanner.scan_subagent_types",
-            lambda: [SpecializedSubagentConfig(name="evaluator", description="Evaluates outputs")],
+            lambda **kwargs: [SpecializedSubagentConfig(name="evaluator", description="Evaluates outputs")],
         )
 
         config = orch._create_subagent_mcp_config("test_agent", agent)
@@ -304,7 +304,7 @@ class TestSubagentMcpConfigEnv:
         """Schema errors in specialized profiles should surface as explicit failures."""
         orch, agent = self._make_orchestrator_and_agent(tmp_path)
 
-        def _raise_profile_error():
+        def _raise_profile_error(**kwargs):
             raise ValueError("Unsupported specialized subagent frontmatter fields")
 
         monkeypatch.setattr(

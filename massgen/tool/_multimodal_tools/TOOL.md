@@ -330,7 +330,7 @@ agents:
 **Available Backends:**
 | Mode  | Backends                        | Default Models |
 |-------|--------------------------------|----------------|
-| image | google, openai, openrouter     | imagen-3.0-generate-002, gpt-4.1, gemini-2.5-flash-image-preview |
+| image | google, openai, openrouter     | imagen-3.0-generate-002, gpt-5.2, gemini-2.5-flash-image-preview |
 | video | google, openai                 | veo-2.0-generate-001, sora-2 |
 | audio | openai                         | gpt-4o-mini-tts |
 

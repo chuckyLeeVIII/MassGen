@@ -1049,6 +1049,24 @@ class ConfigValidator:
                             f"Use one of: {valid_values}",
                         )
 
+                if "subagent_types" in coordination:
+                    st = coordination["subagent_types"]
+                    if st is not None:
+                        if not isinstance(st, list):
+                            result.add_error(
+                                f"'subagent_types' must be a list of strings or null, got {type(st).__name__}",
+                                f"{location}.coordination.subagent_types",
+                                "Use a list like: [evaluator, explorer, novelty]",
+                            )
+                        else:
+                            for i, t in enumerate(st):
+                                if not isinstance(t, str) or not t.strip():
+                                    result.add_error(
+                                        "'subagent_types' entries must be non-empty strings",
+                                        f"{location}.coordination.subagent_types[{i}]",
+                                        "Use type name strings like 'evaluator', 'explorer', 'novelty'",
+                                    )
+
                 if "checklist_criteria_preset" in coordination:
                     preset = coordination["checklist_criteria_preset"]
                     if preset is not None:
