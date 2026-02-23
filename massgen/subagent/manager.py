@@ -2126,6 +2126,14 @@ You are a subagent spawned to work on a specific task. Your workspace is isolate
                         log_path=str(log_dir) if log_dir else None,
                         warning=context_warning,
                     )
+                except asyncio.CancelledError:
+                    # Task was cancelled (e.g., via cancel_subagent).
+                    # Fall through to the cancellation-preservation logic below.
+                    result = SubagentResult.create_error(
+                        subagent_id=config.id,
+                        error="Subagent cancelled",
+                        workspace_path=str(workspace),
+                    )
                 except Exception as e:
                     # Load context warning for the result
                     from massgen.context.task_context import (
@@ -2762,6 +2770,13 @@ You are a subagent spawned to work on a specific task. Your workspace is isolate
             else:
                 return await task
         except TimeoutError:
+            return None
+        except asyncio.CancelledError:
+            # Task was cancelled (e.g., via cancel_subagent).
+            # Return the result that cancel_subagent already stored.
+            state = self._subagents.get(subagent_id)
+            if state and state.result:
+                return state.result
             return None
 
     def list_subagents(self) -> list[dict[str, Any]]:
