@@ -1,96 +1,107 @@
-# MassGen v0.1.56 Roadmap
+# MassGen v0.1.57 Roadmap
 
 ## Overview
 
-Version 0.1.56 focuses on adding spec support to planning workflows and targeted agent queries for more efficient coordination. These features were originally planned for v0.1.54 and deferred through v0.1.55 to prioritize other work (Copilot SDK backend, subagent messaging, then specialized subagent types and dynamic evaluation criteria).
+Version 0.1.57 focuses on per-subagent runtime isolation in Docker environments and improving the iterative refinement loop for better convergence detection and quality-driven iteration.
 
-- **Spec Support for Planning Mode** (Required): Add spec/proposal support to planning workflows
-- **Refactor ask_others for Targeted Agent Queries** (Required): Support targeted queries to specific agents
+- **Per-Subagent Runtime Isolation in Docker** (Required): True per-subagent isolation when parent runs in Docker
+- **Improve Iterative Refinement** (Required): Better convergence detection and quality-driven iteration
 
 ## Key Technical Priorities
 
-1. **Spec Support for Planning**: Add spec/proposal support to planning workflows
-   **Use Case**: Structured specification creation and review during planning mode
+1. **Subagent Isolation**: Provide true per-subagent runtime isolation so each subagent has its own execution boundary when MassGen runs inside Docker
+   **Use Case**: Subagent evaluators that launch local servers no longer interfere with one another
 
-2. **Targeted Agent Queries**: Support targeted queries to specific agents via subagent spawning
-   **Use Case**: More efficient coordination by querying specific agents rather than broadcasting to all
+2. **Iterative Refinement**: Fix checklist off-ramp and convergence detection to distinguish genuine vs incremental improvement
+   **Use Case**: Agents stop when quality is sufficient, push harder when there's real room to improve
 
 ## Key Milestones
 
-### Milestone 1: Spec Support for Planning Mode (REQUIRED)
+### Milestone 1: Per-Subagent Runtime Isolation in Docker (REQUIRED)
 
-**Goal**: Add spec/proposal support to planning workflows
+**Goal**: True per-subagent runtime isolation when parent runs in Docker
 
 **Owner**: @ncrispino (nickcrispino on Discord)
 
-**Issue**: [#881](https://github.com/massgen/MassGen/issues/881)
+**Issue**: [#910](https://github.com/massgen/MassGen/issues/910)
 
-#### 1.1 Spec Integration
-- [ ] Design spec format and workflow for planning mode
-- [ ] Implement spec creation and review capabilities
-- [ ] Integrate with existing planning infrastructure
+#### 1.1 Runtime Architecture
+- [ ] Define runtime architecture where subagents do not share command/process/network namespace by default
+- [ ] Make launch mode explicit (no silent downgrade from docker to local for subagent execution paths)
+- [ ] Eliminate port collisions, shared server state, and ambiguous timeout behavior
 
-#### 1.2 Testing & Validation
-- [ ] Test spec workflows end-to-end
-- [ ] Verify integration with planning mode
+#### 1.2 Communication Contract
+- [ ] Preserve existing subagent communication contract (answer files, workspace handoff, status/log streaming) across isolation modes
+- [ ] Test containerized parent runs with concurrent subagents that each start local servers
+
+#### 1.3 Testing & Validation
+- [ ] Add tests covering containerized parent with concurrent server-launching subagents
+- [ ] Verify subagent UX preserved (logs, status, streaming, cancellation, workspace/context semantics)
 - [ ] Update documentation
 
 **Success Criteria**:
-- Spec support integrated into planning workflows
-- Specs can be created, reviewed, and applied during planning
+- Subagents run in isolated runtime environments when parent is in Docker
+- No port collisions or shared state between concurrent subagents
+- Existing subagent communication contract preserved
 
 ---
 
-### Milestone 2: Refactor ask_others for Targeted Agent Queries (REQUIRED)
+### Milestone 2: Improve Iterative Refinement (REQUIRED)
 
-**Goal**: Support targeted queries to specific agents via subagent spawning
+**Goal**: Better convergence detection and quality-driven iteration
 
 **Owner**: @ncrispino (nickcrispino on Discord)
 
-**Issue**: [#809](https://github.com/massgen/MassGen/issues/809)
+**Issue**: [#874](https://github.com/massgen/MassGen/issues/874)
 
-#### 2.1 Targeted Query Implementation
-- [ ] Implement `ask_others(target_agent_id="Agent-1", question="...")` mode
-- [ ] Implement selective broadcast with `agent_prompts` dict
-- [ ] Pass full `_streaming_buffer` to shadow agents for improved context
+#### 2.1 Fix Checklist Off-Ramp
+- [ ] Make `_checklist_required_true` respect voting threshold (currently hardcoded to all items)
+- [ ] Relax off-ramp so convergence is reachable when only stretch items fail
+- [ ] Fix core/stretch categorization to enable smarter convergence decisions
 
-#### 2.2 Testing & Documentation
-- [ ] Test all three modes: broadcast to all, selective broadcast, targeted ask
-- [ ] Verify context passing via streaming buffer
-- [ ] Document new query modes
+#### 2.2 Convergence Detection
+- [ ] Implement improvement categorization: transformative, structural, incremental
+- [ ] Add LLM-based comparison between round N and round N-1 answers
+- [ ] Scale back overcorrection from low voting sensitivity when improvements are incremental
+
+#### 2.3 Testing & Documentation
+- [ ] Test convergence detection across different quality scenarios
+- [ ] Verify checklist off-ramp behavior with various voting thresholds
+- [ ] Document new convergence behavior and configuration options
 
 **Success Criteria**:
-- Targeted `ask_others` working for specific agent queries
-- Selective broadcast with per-agent prompts functional
-- Improved context passing via streaming buffer
+- Checklist off-ramp respects voting threshold configuration
+- Convergence detection distinguishes incremental from structural improvements
+- Agents stop iterating when improvements are merely incremental
 
 ---
 
 ## Timeline
 
-**Target Release**: February 25, 2026
+**Target Release**: February 27, 2026
 
-### Phase 1 (Feb 23-24)
-- Spec Support for Planning (Milestone 1)
-- Targeted Query Implementation (Milestone 2.1)
+### Phase 1 (Feb 25-26)
+- Subagent Runtime Isolation (Milestone 1.1, 1.2)
+- Checklist Off-Ramp Fix (Milestone 2.1)
 
-### Phase 2 (Feb 24-25)
-- Testing & Validation (Milestones 1.2, 2.2)
+### Phase 2 (Feb 26-27)
+- Convergence Detection (Milestone 2.2)
+- Testing & Validation (Milestones 1.3, 2.3)
 
 ---
 
 ## Success Metrics
 
-- **Spec Quality**: Specs capture structured requirements during planning
-- **Query Efficiency**: Targeted queries reduce unnecessary agent communication
-- **Compatibility**: Seamless integration with existing coordination workflows
+- **Isolation Quality**: No port collisions or shared state between concurrent subagents in Docker
+- **Convergence Accuracy**: Agents correctly identify when improvements are incremental vs structural
+- **Off-Ramp Reachability**: Checklist convergence reachable with reasonable voting threshold settings
 
 ---
 
 ## Resources
 
-- **Issue #881**: [Spec Support for Planning Mode](https://github.com/massgen/MassGen/issues/881)
-- **Issue #809**: [Refactor ask_others for Targeted Agent Queries](https://github.com/massgen/MassGen/issues/809)
+- **Issue #910**: [Per-Subagent Runtime Isolation](https://github.com/massgen/MassGen/issues/910)
+- **Issue #874**: [Improve Iterative Refinement](https://github.com/massgen/MassGen/issues/874)
 - **Owner**: @ncrispino (nickcrispino on Discord)
 - **Related PRs**: TBD
 
@@ -106,7 +117,8 @@ This release builds on previous work:
 - **v0.1.53**: Background Tools & Specialized Subagents (#917)
 - **v0.1.54**: Copilot SDK Backend (#862), Subagent Messaging (#926), Gemini 3.1 Pro
 - **v0.1.55**: Specialized Subagent Types (#938), Dynamic Evaluation Criteria, Native Image Routing
+- **v0.1.56**: Critic Subagent (#945), Spec Plan Mode, Audio Multimodal, ask_others Targeting
 
 And sets the foundation for:
-- **v0.1.57**: Quickstart model curation (#840), TUI screenshot support (#831)
-- **v0.1.58**: Per-agent isolated write contexts (#854), multi-turn round/log fixes (#848)
+- **v0.1.58**: ElevenLabs TTS & STT (#942)
+- **v0.1.59**: Improve skill use and exploration (#873)
