@@ -227,7 +227,27 @@ Most configurations use environment variables for API keys:so
 
 ## Release History & Examples
 
-### v0.1.55 - Latest
+### v0.1.56 - Latest
+**New Features:** Critic Subagent, Spec Plan Mode, Audio Multimodal Support, ask_others Targeting
+
+**Key Features:**
+- **Critic Subagent**: New subagent type for honest, unbiased quality assessment detecting genuine vs incremental improvement
+- **Spec Plan Mode**: `plan_mode="spec"` for formal requirements specification before execution with TUI spec mode support
+- **Audio Multimodal Support**: Audio understanding (Gemini native + Whisper fallback) and generation (OpenAI TTS) via `read_media` and `generate_media`
+- **ask_others Targeted Messaging**: `target_agents` parameter for focused agent-to-agent communication
+- **read_media Conversation Continuity**: Follow-up conversations on media via `continue_from` conversation_id
+- **Codex OAuth Login**: Codex backend always available in WebUI regardless of OPENAI_API_KEY
+
+**Try It:**
+```bash
+# Install or upgrade to v0.1.56
+pip install --upgrade massgen
+
+# Multi-agent coordination with critic subagent quality assessment
+uv run massgen --automation --config massgen/configs/basic/multi_agent.yaml "Analyze and improve this solution"
+```
+
+### v0.1.55
 **New Features:** Specialized Subagent Types, Dynamic Evaluation Criteria, Native Backend Image Routing, Configurable Video Frame Extraction
 
 **Key Features:**
@@ -235,17 +255,6 @@ Most configurations use environment variables for API keys:so
 - **Dynamic Evaluation Criteria**: GEPA-inspired task-specific evaluation criteria with domain presets and core/stretch categorization
 - **Native Backend Image Routing**: `understand_image` routes to agent's own backend (Claude, Gemini, Grok, Claude Code, Codex) with OpenAI fallback
 - **Configurable Video Frame Extraction**: Scene-based (PySceneDetect) or uniform extraction with `max_frames` cost guardrail
-- **Remotion Skill in Quickstart**: Video generation/editing skill installed when selected during quickstart
-- **Unified Pre-Collaboration**: Persona generation, decomposition, and eval criteria generation unified as composable primitives
-
-**Try It:**
-```bash
-# Install or upgrade to v0.1.55
-pip install --upgrade massgen
-
-# Multi-agent coordination with specialized subagents
-uv run massgen --config massgen/configs/features/background_subagent_example.yaml --cwd-context ro "Use an explorer subagent to analyze this repo"
-```
 
 ### v0.1.54
 **New Features:** Copilot SDK Backend, Subagent Runtime Messaging, Gemini 3.1 Pro Support, Per-Agent Injection Targeting
