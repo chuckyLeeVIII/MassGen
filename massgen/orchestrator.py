@@ -798,6 +798,8 @@ class Orchestrator(ChatAgent):
                 "item_categories": item_categories,
                 # Novelty subagent guidance only when novelty type is available
                 "novelty_subagent_enabled": "novelty" in [t.lower() for t in _active_subagent_types],
+                # Critic subagent guidance only when critic type is available
+                "critic_subagent_enabled": "critic" in [t.lower() for t in _active_subagent_types],
             }
             backend._checklist_state = checklist_state
             backend._checklist_items = list(items)
@@ -1101,6 +1103,8 @@ class Orchestrator(ChatAgent):
                 ),
                 # Preserve novelty gating from initial state (config-driven, doesn't change)
                 "novelty_subagent_enabled": state.get("novelty_subagent_enabled", False),
+                # Preserve critic gating from initial state
+                "critic_subagent_enabled": state.get("critic_subagent_enabled", False),
             },
         )
         # Re-write specs file for stdio backends so the MCP server sees updated state
