@@ -70,6 +70,7 @@ class SubagentManager:
         subagent_runtime_mode: str = "isolated",
         subagent_runtime_fallback_mode: str | None = None,
         subagent_host_launch_prefix: list[str] | None = None,
+        delegation_directory: str | None = None,
     ):
         """
         Initialize SubagentManager.
@@ -105,6 +106,9 @@ class SubagentManager:
                 "inherited" explicitly opts into shared-runtime fallback.
             subagent_host_launch_prefix: Optional command prefix used for isolated
                 launch when parent runtime is containerized.
+            delegation_directory: Path to shared delegation directory for file-based
+                container-to-host subagent launch (delegated mode). The container writes
+                request files here; the host-side SubagentLaunchWatcher picks them up.
         """
         self.parent_workspace = Path(parent_workspace)
         self.parent_agent_id = parent_agent_id
@@ -121,6 +125,7 @@ class SubagentManager:
         self._subagent_runtime_mode = subagent_runtime_mode or "isolated"
         self._subagent_runtime_fallback_mode = subagent_runtime_fallback_mode
         self._subagent_host_launch_prefix = subagent_host_launch_prefix[:] if subagent_host_launch_prefix else []
+        self._delegation_directory = delegation_directory
         self._running_inside_container = os.path.exists("/.dockerenv")
         self._validate_runtime_configuration()
 
@@ -226,7 +231,7 @@ class SubagentManager:
 
     def _validate_runtime_configuration(self) -> None:
         """Validate runtime mode/fallback configuration."""
-        valid_runtime_modes = {"isolated", "inherited"}
+        valid_runtime_modes = {"isolated", "inherited", "delegated"}
         if self._subagent_runtime_mode not in valid_runtime_modes:
             raise ValueError(
                 f"Invalid subagent_runtime_mode: '{self._subagent_runtime_mode}'. " f"Must be one of: {sorted(valid_runtime_modes)}",
@@ -238,9 +243,9 @@ class SubagentManager:
                 "Invalid subagent_runtime_fallback_mode: " f"'{self._subagent_runtime_fallback_mode}'. Must be one of [None, 'inherited']",
             )
 
-        if self._subagent_runtime_mode != "isolated" and self._subagent_runtime_fallback_mode is not None:
+        if self._subagent_runtime_mode not in {"isolated", "delegated"} and self._subagent_runtime_fallback_mode is not None:
             raise ValueError(
-                "subagent_runtime_fallback_mode is only valid when subagent_runtime_mode is 'isolated'",
+                "subagent_runtime_fallback_mode is only valid when subagent_runtime_mode is 'isolated' or 'delegated'",
             )
 
         if self._subagent_host_launch_prefix and any(not isinstance(token, str) or not token.strip() for token in self._subagent_host_launch_prefix):
@@ -269,6 +274,17 @@ class SubagentManager:
         """
         if self._subagent_runtime_mode == "inherited":
             return "inherited", None
+
+        if self._subagent_runtime_mode == "delegated":
+            if not self._running_inside_container:
+                raise RuntimeError(
+                    "Subagent runtime mode 'delegated' requires running inside a container " "(/.dockerenv must exist). Use 'isolated' or 'inherited' for non-containerized runtimes.",
+                )
+            if not self._delegation_directory:
+                raise RuntimeError(
+                    "Subagent runtime mode 'delegated' requires delegation_directory to be set. " "The delegation directory is the shared path for container-to-host communication.",
+                )
+            return "delegated", None
 
         # isolated mode requested
         if not self._running_inside_container:
@@ -385,28 +401,42 @@ class SubagentManager:
             List of validated context path dicts with "path" and "permission" keys.
         """
         resolved_paths: list[dict[str, str]] = []
-        if not config.context_paths:
-            return resolved_paths
 
         parent_ws_resolved = self.parent_workspace.resolve()
 
-        # Build set of allowed roots: parent workspace + parent context path roots
-        allowed_roots: list[Path] = [parent_ws_resolved]
+        # Build set of allowed roots based on config flags.
+        # include_parent_workspace (default True): allow explicit context_paths under parent ws.
+        # agent_temporary_workspace: always allowed when configured (contains only peer
+        # snapshots visible to this agent — framework-managed, safe to always allow).
+        # Parent context path roots (from orchestrator config) are always allowed.
+        allowed_roots: list[Path] = []
+        if config.include_parent_workspace:
+            allowed_roots.append(parent_ws_resolved)
         for pcp in self._parent_context_paths:
             root = Path(pcp["path"])
             if root not in allowed_roots:
                 allowed_roots.append(root)
+        # Always allow agent_temporary_workspace paths (agent-specific dir containing
+        # only peer snapshots this agent is already allowed to see).
+        if self._agent_temporary_workspace:
+            temp_root = self._agent_temporary_workspace
+            if not temp_root.is_absolute():
+                temp_root = (self.parent_workspace / temp_root).resolve()
+            else:
+                temp_root = temp_root.resolve()
+            if temp_root not in allowed_roots:
+                allowed_roots.append(temp_root)
+
+        if not config.context_paths:
+            return resolved_paths
 
         seen: set[str] = set()
         for rel_path in config.context_paths:
-            if rel_path in ("./", "."):
-                resolved = parent_ws_resolved
+            candidate = Path(rel_path)
+            if candidate.is_absolute():
+                resolved = candidate.resolve()
             else:
-                candidate = Path(rel_path)
-                if candidate.is_absolute():
-                    resolved = candidate.resolve()
-                else:
-                    resolved = (self.parent_workspace / rel_path).resolve()
+                resolved = (self.parent_workspace / rel_path).resolve()
 
             # Validate: resolved path must be within an allowed root
             is_allowed = any(resolved == root or resolved.is_relative_to(root) for root in allowed_roots)
@@ -840,8 +870,28 @@ You are a subagent spawned to work on a specific task. Your workspace is isolate
 
         _, context_warning = load_task_context_with_warning(str(workspace))
 
+        # Determine effective runtime mode
         try:
-            # Always use orchestrator mode for subagent execution
+            runtime_mode, _ = self._resolve_effective_runtime_mode()
+        except RuntimeError as e:
+            return SubagentResult.create_error(
+                subagent_id=config.id,
+                error=str(e),
+                workspace_path=str(workspace),
+                execution_time_seconds=0.0,
+                warning=context_warning,
+            )
+
+        try:
+            if runtime_mode == "delegated":
+                return await self._execute_delegated(
+                    config,
+                    workspace,
+                    start_time,
+                    context_warning,
+                )
+
+            # Always use orchestrator mode for non-delegated execution
             return await self._execute_with_orchestrator(
                 config,
                 workspace,
@@ -1106,6 +1156,194 @@ You are a subagent spawned to work on a specific task. Your workspace is isolate
                 execution_time_seconds=time.time() - start_time,
                 log_path=str(log_dir) if log_dir else None,
                 warning=combined_warning,
+            )
+
+    async def _execute_delegated(
+        self,
+        config: "SubagentConfig",
+        workspace: Path,
+        start_time: float,
+        context_warning: str | None = None,
+    ) -> "SubagentResult":
+        """
+        Execute a subagent via file-based delegation to a host-side watcher.
+
+        The container writes a DelegationRequest file; the host-side
+        SubagentLaunchWatcher creates an isolated Docker container and writes back
+        a DelegationResponse.  This avoids Docker-in-Docker and Docker socket
+        mounting inside the parent container.
+
+        Args:
+            config: Subagent configuration
+            workspace: Path to subagent workspace (already created)
+            start_time: Execution start time (from time.time())
+            context_warning: Optional CONTEXT.md warning to propagate
+
+        Returns:
+            SubagentResult with execution outcome
+        """
+        import secrets
+
+        import yaml
+
+        from massgen.subagent.delegation_protocol import (
+            DELEGATION_PROTOCOL_VERSION,
+            DelegationRequest,
+            DelegationResponse,
+            response_path,
+            write_cancel_sentinel,
+        )
+
+        delegation_dir = Path(self._delegation_directory)  # type: ignore[arg-type]
+        delegation_dir.mkdir(parents=True, exist_ok=True)
+
+        # Build context paths for YAML config
+        context_paths: list[dict[str, str]] = []
+        if config.context_files:
+            for ctx_file in config.context_files:
+                src_path = Path(ctx_file)
+                if src_path.exists():
+                    context_paths.append({"path": str(src_path.resolve()), "permission": "read"})
+        validated_ctx_paths = self._resolve_context_paths_for_subagent(config)
+        existing = {p["path"] for p in context_paths}
+        for vcp in validated_ctx_paths:
+            if vcp["path"] not in existing:
+                context_paths.append(vcp)
+                existing.add(vcp["path"])
+
+        workspace_abs = workspace.resolve()
+
+        # Generate YAML config and write to workspace (for reference / debugging)
+        subagent_yaml = self._generate_subagent_yaml_config(config, workspace, context_paths)
+        yaml_path = workspace_abs / f"subagent_config_{config.id}.yaml"
+        yaml_path.write_text(yaml.dump(subagent_yaml, default_flow_style=False))
+
+        # Build system prompt / task string
+        full_task, _ = self._build_subagent_system_prompt(config, workspace)
+
+        answer_file = workspace_abs / "answer.txt"
+        request_id = secrets.token_hex(8)
+
+        # Create live logs symlink BEFORE writing request (TUI can start watching immediately)
+        self._create_live_logs_symlink(config.id, workspace)
+
+        # Write delegation request (atomic)
+        timeout = self._clamp_timeout(config.timeout_seconds)
+        req = DelegationRequest(
+            version=DELEGATION_PROTOCOL_VERSION,
+            subagent_id=config.id,
+            request_id=request_id,
+            task=full_task,
+            yaml_config=subagent_yaml,
+            answer_file=str(answer_file),
+            workspace=str(workspace_abs),
+            timeout_seconds=timeout,
+        )
+        req.to_file(delegation_dir)
+
+        logger.info(
+            f"[SubagentManager] Delegated request written for {config.id}, " f"timeout={timeout}s, delegation_dir={delegation_dir}",
+        )
+
+        # Poll for response file with timeout + 30s grace
+        grace_seconds = 30
+        poll_deadline = start_time + timeout + grace_seconds
+        poll_interval = 0.5
+
+        response: DelegationResponse | None = None
+        resp_path = response_path(delegation_dir, config.id)
+
+        try:
+            while True:
+                remaining = poll_deadline - time.time()
+                if remaining <= 0:
+                    logger.warning(f"[SubagentManager] Delegated subagent {config.id} timed out waiting for response")
+                    write_cancel_sentinel(delegation_dir, config.id)
+                    log_dir = self._get_subagent_log_dir(config.id)
+                    return self._create_timeout_result_with_recovery(
+                        subagent_id=config.id,
+                        workspace=workspace,
+                        timeout_seconds=timeout,
+                        log_path=str(log_dir) if log_dir else None,
+                        warning=context_warning,
+                    )
+
+                if resp_path.exists():
+                    try:
+                        response = DelegationResponse.from_file(resp_path)
+                        break
+                    except (json.JSONDecodeError, KeyError, ValueError) as e:
+                        logger.debug(f"[SubagentManager] Response not yet ready for {config.id}: {e}")
+
+                await asyncio.sleep(poll_interval)
+
+        except asyncio.CancelledError:
+            logger.warning(f"[SubagentManager] Delegated subagent {config.id} cancelled")
+            write_cancel_sentinel(delegation_dir, config.id)
+            log_dir = self._get_subagent_log_dir(config.id)
+            return self._create_timeout_result_with_recovery(
+                subagent_id=config.id,
+                workspace=workspace,
+                timeout_seconds=time.time() - start_time,
+                log_path=str(log_dir) if log_dir else None,
+                warning=context_warning,
+            )
+
+        finally:
+            # Clean up request and response files
+            try:
+                req_file = delegation_dir / f"request_{config.id}.json"
+                if req_file.exists():
+                    req_file.unlink()
+                if resp_path.exists():
+                    resp_path.unlink()
+            except OSError as e:
+                logger.debug(f"[SubagentManager] Cleanup of delegation files for {config.id}: {e}")
+
+        # Process response
+        execution_time = time.time() - start_time
+        log_dir = self._get_subagent_log_dir(config.id)
+
+        if response.status == "completed" and response.exit_code == 0:
+            answer = answer_file.read_text().strip() if answer_file.exists() else ""
+            token_usage, subprocess_log_dir, session_id = self._parse_subprocess_status(workspace)
+            self._write_subprocess_log_reference(config.id, subprocess_log_dir)
+            if session_id:
+                self._subagent_sessions[config.id] = session_id
+            return SubagentResult(
+                subagent_id=config.id,
+                status="completed",
+                success=True,
+                answer=answer,
+                workspace_path=str(workspace),
+                execution_time_seconds=execution_time,
+                token_usage=token_usage,
+                log_path=str(log_dir) if log_dir else None,
+                warning=context_warning,
+            )
+
+        elif response.status == "timeout":
+            return self._create_timeout_result_with_recovery(
+                subagent_id=config.id,
+                workspace=workspace,
+                timeout_seconds=timeout,
+                log_path=str(log_dir) if log_dir else None,
+                warning=context_warning,
+            )
+
+        else:
+            # error or cancelled
+            error_msg = f"Delegated subagent {config.id} {response.status} " f"(exit_code={response.exit_code}): {response.stderr_tail[:500]}"
+            logger.error(f"[SubagentManager] {error_msg}")
+            _, subprocess_log_dir, _ = self._parse_subprocess_status(workspace)
+            self._write_subprocess_log_reference(config.id, subprocess_log_dir, error=error_msg)
+            return SubagentResult.create_error(
+                subagent_id=config.id,
+                error=error_msg,
+                workspace_path=str(workspace),
+                execution_time_seconds=execution_time,
+                log_path=str(log_dir) if log_dir else None,
+                warning=context_warning,
             )
 
     async def execute_with_streaming(
@@ -1571,6 +1809,10 @@ You are a subagent spawned to work on a specific task. Your workspace is isolate
                     f"[SubagentManager] Inherited {setting}={self._parent_coordination_config[setting]} from parent",
                 )
 
+        # Subagents always use final_only learning capture: capturing per-round learnings
+        # is wasteful overhead for short-lived tasks.
+        coord_settings["learning_capture_mode"] = "final_only"
+
         orchestrator_config = {
             "snapshot_storage": str(workspace / "snapshots"),
             "agent_temporary_workspace": str(workspace / "temp"),
@@ -1597,13 +1839,20 @@ You are a subagent spawned to work on a specific task. Your workspace is isolate
         # Task-specific context paths from context_files are also read-only
         merged_context_paths: list[dict[str, str]] = []
 
-        # Add parent context paths first (always read-only for subagents)
+        # Determine which parent workspace path to exclude when include_parent_workspace=False
+        parent_ws_str = str(self.parent_workspace.resolve())
+
+        # Add parent context paths (always read-only for subagents).
+        # When include_parent_workspace=False, skip the parent workspace entry so the
+        # subagent runs in full isolation without access to the parent's files.
         if self._parent_context_paths:
             for parent_path in self._parent_context_paths:
-                # Force read-only for subagents to prevent uncontrolled writes
+                path_str = parent_path.get("path", "")
+                if not config.include_parent_workspace and path_str == parent_ws_str:
+                    continue
                 merged_context_paths.append(
                     {
-                        "path": parent_path.get("path", ""),
+                        "path": path_str,
                         "permission": "read",  # Always read for subagents
                     },
                 )
@@ -1820,6 +2069,7 @@ You are a subagent spawned to work on a specific task. Your workspace is isolate
         timeout_seconds: int | None = None,
         context_files: list[str] | None = None,
         context_paths: list[str] | None = None,
+        include_parent_workspace: bool = True,
         system_prompt: str | None = None,
         refine: bool = True,
         skills: list[str] | None = None,
@@ -1835,7 +2085,8 @@ You are a subagent spawned to work on a specific task. Your workspace is isolate
             model: Optional model override
             timeout_seconds: Optional timeout (uses default if not specified)
             context_files: Optional files to copy to subagent workspace
-            context_paths: Optional paths to mount read-only (files/dirs, "./" = parent workspace)
+            context_paths: Extra read-only paths (e.g., peer workspace paths)
+            include_parent_workspace: Mount parent workspace read-only (default True)
             system_prompt: Optional custom system prompt
             refine: If True (default), allow multi-round coordination and refinement.
                     If False, return first answer without iteration (faster).
@@ -1857,6 +2108,7 @@ You are a subagent spawned to work on a specific task. Your workspace is isolate
             timeout_seconds=clamped_timeout,
             context_files=context_files or [],
             context_paths=context_paths or [],
+            include_parent_workspace=include_parent_workspace,
             system_prompt=system_prompt,
             metadata=metadata,
         )
@@ -2012,6 +2264,7 @@ You are a subagent spawned to work on a specific task. Your workspace is isolate
                 timeout_seconds=timeout_seconds or task_config.get("timeout_seconds"),
                 context_files=task_config.get("context_files"),
                 context_paths=task_config.get("context_paths"),
+                include_parent_workspace=task_config.get("include_parent_workspace", True),
                 system_prompt=task_config.get("system_prompt"),
                 refine=refine,
                 skills=task_config.get("skills"),
@@ -2045,9 +2298,11 @@ You are a subagent spawned to work on a specific task. Your workspace is isolate
         timeout_seconds: int | None = None,
         context_files: list[str] | None = None,
         context_paths: list[str] | None = None,
+        include_parent_workspace: bool = True,
         system_prompt: str | None = None,
         refine: bool = True,
         skills: list[str] | None = None,
+        subagent_type: str | None = None,
     ) -> dict[str, Any]:
         """
         Spawn a subagent in the background (non-blocking).
@@ -2062,7 +2317,8 @@ You are a subagent spawned to work on a specific task. Your workspace is isolate
             model: Optional model override
             timeout_seconds: Optional timeout (uses default if not specified)
             context_files: Optional files to copy to subagent workspace
-            context_paths: Optional paths to mount read-only (files/dirs, "./" = parent workspace)
+            context_paths: Extra read-only paths (e.g., peer workspace paths)
+            include_parent_workspace: Mount parent workspace read-only (default True)
             system_prompt: Optional custom system prompt
             skills: Optional list of skill names to pre-load for the subagent
 
@@ -2082,6 +2338,7 @@ You are a subagent spawned to work on a specific task. Your workspace is isolate
             timeout_seconds=clamped_timeout,
             context_files=context_files or [],
             context_paths=context_paths or [],
+            include_parent_workspace=include_parent_workspace,
             system_prompt=system_prompt,
             metadata=metadata,
         )
@@ -2125,6 +2382,7 @@ You are a subagent spawned to work on a specific task. Your workspace is isolate
                 "status": "error",
                 "workspace": str(workspace),
                 "error": error_msg,
+                **({"subagent_type": subagent_type} if subagent_type else {}),
             }
 
         # Track state
@@ -2264,7 +2522,20 @@ You are a subagent spawned to work on a specific task. Your workspace is isolate
             "status": "running",
             "workspace": str(workspace),
             "status_file": status_file,
+            **({"subagent_type": subagent_type} if subagent_type else {}),
         }
+
+    def remove_immediately_failed_subagent(self, subagent_id: str) -> None:
+        """Remove a subagent that failed before doing any real work (pre-flight error).
+
+        Called by the MCP server when a spawn immediately errors (e.g. CONTEXT.md
+        missing) so the auto-generated ID slot can be reclaimed for the next spawn.
+        Only removes subagents with error status — never touches running/completed ones.
+        """
+        state = self._subagents.get(subagent_id)
+        if state is not None and str(getattr(state, "status", "")).lower() in {"error", "failed"}:
+            del self._subagents[subagent_id]
+            logger.info(f"[SubagentManager] Freed immediately-failed subagent slot: {subagent_id}")
 
     def continue_subagent_background(
         self,
@@ -3324,6 +3595,26 @@ You are a subagent spawned to work on a specific task. Your workspace is isolate
                 "success": False,
                 "error": f"Subagent {subagent_id} already in terminal state: {state.status}",
             }
+
+        # Delegated mode: write cancel sentinel and cancel background task.
+        if self._subagent_runtime_mode == "delegated" and self._delegation_directory:
+            try:
+                from massgen.subagent.delegation_protocol import write_cancel_sentinel
+
+                write_cancel_sentinel(Path(self._delegation_directory), subagent_id)
+                logger.info(f"[SubagentManager] Wrote cancel sentinel for delegated subagent {subagent_id}")
+            except Exception as e:
+                logger.error(f"[SubagentManager] Failed to write cancel sentinel for {subagent_id}: {e}")
+
+            bg_task = self._background_tasks.get(subagent_id)
+            if bg_task and not bg_task.done():
+                bg_task.cancel()
+                logger.info(f"[SubagentManager] Cancelled background task for delegated subagent {subagent_id}")
+
+            state.status = "cancelled"
+            if state.finished_at is None:
+                state.finished_at = datetime.now()
+            return {"success": True, "subagent_id": subagent_id, "status": "cancelled"}
 
         # Graceful shutdown: send SIGINT BEFORE cancelling bg_task.
         # bg_task.cancel() raises CancelledError into _execute_with_orchestrator,

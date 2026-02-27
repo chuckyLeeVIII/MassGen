@@ -281,10 +281,11 @@ class TestChangedocChecklist:
         builder = SystemMessageBuilder(config=config, message_templates=mt, agents=agents)
         agent = _make_agent()
 
+        # Pass a prior answer so round-2+ checklist instructions are shown
         msg = builder.build_coordination_message(
             agent=agent,
             agent_id="agent_a",
-            answers=None,
+            answers={"agent_a": "prior answer"},
             planning_mode_enabled=False,
             use_skills=False,
             enable_memory=False,
@@ -304,10 +305,11 @@ class TestChangedocChecklist:
         builder = SystemMessageBuilder(config=config, message_templates=mt, agents=agents)
         agent = _make_agent()
 
+        # Pass a prior answer so round-2+ checklist instructions are shown
         msg = builder.build_coordination_message(
             agent=agent,
             agent_id="agent_a",
-            answers=None,
+            answers={"agent_a": "prior answer"},
             planning_mode_enabled=False,
             use_skills=False,
             enable_memory=False,
@@ -851,14 +853,14 @@ class TestEvaluationDelegation:
         assert "send_message_to_subagent" in lower
         assert "continue_subagent" in lower
 
-    def test_subagent_section_requires_explicit_context_paths(self):
-        """Subagent guidance must require explicit context_paths (including [])."""
+    def test_subagent_section_documents_workspace_access(self):
+        """Subagent guidance must document workspace access model."""
         content = _subagent_content()
         lower = content.lower()
+        # include_parent_workspace is the primary field (auto-mounts parent read-only)
+        assert "include_parent_workspace" in lower
+        assert "auto-mounted" in lower or "auto-mount" in lower
+        assert "read-only" in lower or "read only" in lower
+        # context_paths is optional for additional paths
         assert "context_paths" in lower
-        assert "required" in lower
-        assert "[]" in content
-        assert '["./"]' in content
-        assert "current parent workspace (cwd)" in lower
-        assert "temp_workspaces" in lower
         assert "parent workspace" in lower

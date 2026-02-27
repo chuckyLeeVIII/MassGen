@@ -20,6 +20,9 @@ async def _build_subagent_server(monkeypatch, tmp_path):
     # Ensure clean global state per test.
     server._manager = None
     server._workspace_path = None
+    server._specialized_subagents = {}
+    server._subagent_types_loaded = False
+    server._next_subagent_index = 0
 
     monkeypatch.setattr(
         sys,
@@ -207,11 +210,104 @@ class TestContinueSubagentBackground:
         assert fake_manager.continue_background_calls == []
 
 
-class TestSpawnSubagentsContextPathsRequirement:
-    """Validation behavior for explicit context_paths requirement."""
+class TestSpawnSubagentsAutoIncrementIds:
+    """Default subagent IDs must be globally unique across multiple spawn calls."""
 
     @pytest.mark.asyncio
-    async def test_missing_context_paths_field_is_rejected(self, monkeypatch, tmp_path):
+    async def test_successive_spawns_get_incrementing_ids(self, monkeypatch, tmp_path):
+        """Two spawn calls without explicit IDs must NOT reuse subagent_0."""
+        server, handler = await _build_spawn_subagents_handler(monkeypatch, tmp_path)
+        fake_manager = _FakeSubagentManager()
+        monkeypatch.setattr(server, "_get_manager", lambda: fake_manager)
+
+        # First call: 2 tasks with no explicit subagent_id
+        result1 = await _invoke_handler(
+            handler,
+            tasks=[
+                {"task": "Critique the site", "context_paths": []},
+                {"task": "Propose novelty", "context_paths": []},
+            ],
+            background=True,
+            refine=False,
+        )
+        assert result1["success"] is True
+        ids_first = [s["subagent_id"] for s in result1["subagents"]]
+        assert ids_first == ["subagent_0", "subagent_1"]
+
+        # Second call: 1 task with no explicit subagent_id
+        result2 = await _invoke_handler(
+            handler,
+            tasks=[
+                {"task": "Build the site", "context_paths": []},
+            ],
+            background=True,
+            refine=False,
+        )
+        assert result2["success"] is True
+        ids_second = [s["subagent_id"] for s in result2["subagents"]]
+        # Must be subagent_2, NOT subagent_0
+        assert ids_second == ["subagent_2"], f"Expected ['subagent_2'] but got {ids_second} — " "default IDs must auto-increment across spawn calls"
+
+    @pytest.mark.asyncio
+    async def test_explicit_ids_do_not_affect_counter(self, monkeypatch, tmp_path):
+        """Explicit subagent_id values should not consume counter slots."""
+        server, handler = await _build_spawn_subagents_handler(monkeypatch, tmp_path)
+        fake_manager = _FakeSubagentManager()
+        monkeypatch.setattr(server, "_get_manager", lambda: fake_manager)
+
+        # First call with explicit IDs
+        result1 = await _invoke_handler(
+            handler,
+            tasks=[
+                {"task": "Research", "subagent_id": "my_researcher", "context_paths": []},
+            ],
+            background=True,
+            refine=False,
+        )
+        assert result1["success"] is True
+
+        # Second call with auto-generated IDs should still start from 0
+        # because no auto-IDs have been consumed yet
+        result2 = await _invoke_handler(
+            handler,
+            tasks=[
+                {"task": "Build", "context_paths": []},
+            ],
+            background=True,
+            refine=False,
+        )
+        assert result2["success"] is True
+        ids = [s["subagent_id"] for s in result2["subagents"]]
+        assert ids == ["subagent_0"]
+
+    @pytest.mark.asyncio
+    async def test_mixed_explicit_and_auto_ids(self, monkeypatch, tmp_path):
+        """Mix of explicit and auto IDs in one call: auto IDs still increment."""
+        server, handler = await _build_spawn_subagents_handler(monkeypatch, tmp_path)
+        fake_manager = _FakeSubagentManager()
+        monkeypatch.setattr(server, "_get_manager", lambda: fake_manager)
+
+        result = await _invoke_handler(
+            handler,
+            tasks=[
+                {"task": "Auto task", "context_paths": []},
+                {"task": "Named task", "subagent_id": "custom_name", "context_paths": []},
+                {"task": "Another auto", "context_paths": []},
+            ],
+            background=True,
+            refine=False,
+        )
+        assert result["success"] is True
+        ids = [s["subagent_id"] for s in result["subagents"]]
+        assert ids == ["subagent_0", "custom_name", "subagent_1"]
+
+
+class TestSpawnSubagentsContextPathsRequirement:
+    """Validation behavior for context_paths and workspace access fields."""
+
+    @pytest.mark.asyncio
+    async def test_missing_context_paths_field_is_accepted(self, monkeypatch, tmp_path):
+        """context_paths is now optional — omitting it is fine (parent workspace is always-on)."""
         server, handler = await _build_spawn_subagents_handler(monkeypatch, tmp_path)
         fake_manager = _FakeSubagentManager()
         monkeypatch.setattr(server, "_get_manager", lambda: fake_manager)
@@ -223,9 +319,8 @@ class TestSpawnSubagentsContextPathsRequirement:
             refine=False,
         )
 
-        assert result["success"] is False
-        assert "context_paths" in result["error"]
-        assert "[]" in result["error"]
+        assert result["success"] is True
+        assert result["mode"] == "background"
 
     @pytest.mark.asyncio
     async def test_context_paths_must_be_list(self, monkeypatch, tmp_path):
@@ -313,6 +408,140 @@ class TestSpawnSubagentsContextPathsRequirement:
         assert fake_manager.background_calls == []
 
     @pytest.mark.asyncio
+    async def test_nonexistent_absolute_context_path_is_rejected(self, monkeypatch, tmp_path):
+        """Absolute path that doesn't exist should fail fast with workspace info."""
+        server, handler = await _build_spawn_subagents_handler(monkeypatch, tmp_path)
+        fake_manager = _FakeSubagentManager()
+        monkeypatch.setattr(server, "_get_manager", lambda: fake_manager)
+
+        result = await _invoke_handler(
+            handler,
+            tasks=[
+                {
+                    "task": "Screenshot the website",
+                    "context_paths": ["/nonexistent/path/to/nowhere"],
+                },
+            ],
+            background=True,
+            refine=False,
+        )
+
+        assert result["success"] is False
+        assert result["operation"] == "spawn_subagents"
+        assert "/nonexistent/path/to/nowhere" in result["error"]
+        assert str(tmp_path) in result["error"]  # workspace path shown for guidance
+        assert fake_manager.background_calls == []
+
+    @pytest.mark.asyncio
+    async def test_nonexistent_relative_context_path_is_rejected(self, monkeypatch, tmp_path):
+        """Relative path that doesn't exist (e.g. hallucinated temp_workspaces) fails fast."""
+        server, handler = await _build_spawn_subagents_handler(monkeypatch, tmp_path)
+        fake_manager = _FakeSubagentManager()
+        monkeypatch.setattr(server, "_get_manager", lambda: fake_manager)
+
+        result = await _invoke_handler(
+            handler,
+            tasks=[
+                {
+                    "task": "Evaluate the site",
+                    "context_paths": ["./temp_workspaces/agent_a/agent1"],
+                },
+            ],
+            background=True,
+            refine=False,
+        )
+
+        assert result["success"] is False
+        assert result["operation"] == "spawn_subagents"
+        assert "temp_workspaces/agent_a/agent1" in result["error"]
+        assert str(tmp_path) in result["error"]  # workspace path shown for guidance
+        assert fake_manager.background_calls == []
+
+    @pytest.mark.asyncio
+    async def test_dotslash_context_path_accepted_when_workspace_exists(self, monkeypatch, tmp_path):
+        """'["./"]' resolves to the workspace root which always exists."""
+        server, handler = await _build_spawn_subagents_handler(monkeypatch, tmp_path)
+        fake_manager = _FakeSubagentManager()
+        monkeypatch.setattr(server, "_get_manager", lambda: fake_manager)
+
+        result = await _invoke_handler(
+            handler,
+            tasks=[
+                {
+                    "task": "Take screenshots of the website",
+                    "context_paths": ["./"],
+                },
+            ],
+            background=True,
+            refine=False,
+        )
+
+        assert result["success"] is True
+        assert fake_manager.background_calls[0]["context_paths"] == ["./"]
+
+    @pytest.mark.asyncio
+    async def test_existing_subdirectory_context_path_is_accepted(self, monkeypatch, tmp_path):
+        """A relative path resolving to an existing subdirectory is valid."""
+        deliverable = tmp_path / "deliverable"
+        deliverable.mkdir()
+
+        server, handler = await _build_spawn_subagents_handler(monkeypatch, tmp_path)
+        fake_manager = _FakeSubagentManager()
+        monkeypatch.setattr(server, "_get_manager", lambda: fake_manager)
+
+        result = await _invoke_handler(
+            handler,
+            tasks=[
+                {
+                    "task": "Review deliverable files",
+                    "context_paths": ["./deliverable"],
+                },
+            ],
+            background=True,
+            refine=False,
+        )
+
+        assert result["success"] is True
+        assert fake_manager.background_calls[0]["context_paths"] == ["./deliverable"]
+
+    @pytest.mark.asyncio
+    async def test_context_paths_field_is_optional(self, monkeypatch, tmp_path):
+        """context_paths is now optional — parent workspace is always-on."""
+        server, handler = await _build_spawn_subagents_handler(monkeypatch, tmp_path)
+        fake_manager = _FakeSubagentManager()
+        monkeypatch.setattr(server, "_get_manager", lambda: fake_manager)
+
+        result = await _invoke_handler(
+            handler,
+            tasks=[{"task": "Research OAuth patterns"}],  # no context_paths
+            background=True,
+            refine=False,
+        )
+
+        assert result["success"] is True
+        assert result["mode"] == "background"
+        assert len(fake_manager.background_calls) == 1
+        # context_paths defaults to []
+        assert fake_manager.background_calls[0]["context_paths"] == []
+
+    @pytest.mark.asyncio
+    async def test_include_parent_workspace_false_passes_through(self, monkeypatch, tmp_path):
+        """include_parent_workspace=False is accepted and passed to the manager."""
+        server, handler = await _build_spawn_subagents_handler(monkeypatch, tmp_path)
+        fake_manager = _FakeSubagentManager()
+        monkeypatch.setattr(server, "_get_manager", lambda: fake_manager)
+
+        result = await _invoke_handler(
+            handler,
+            tasks=[{"task": "Isolated research", "include_parent_workspace": False}],
+            background=True,
+            refine=False,
+        )
+
+        assert result["success"] is True
+        assert fake_manager.background_calls[0]["include_parent_workspace"] is False
+
+    @pytest.mark.asyncio
     async def test_reusing_completed_subagent_id_is_allowed(self, monkeypatch, tmp_path):
         """Completed IDs can be reused; only running IDs are blocked."""
         server, handler = await _build_spawn_subagents_handler(monkeypatch, tmp_path)
@@ -340,55 +569,6 @@ class TestSpawnSubagentsContextPathsRequirement:
 
 class TestSpecializedTypesFileNotDeleted:
     """Temp config files must survive MCP server startup (no race condition)."""
-
-    @pytest.mark.asyncio
-    async def test_specialized_types_file_persists_after_create_server(self, monkeypatch, tmp_path):
-        """The MCP server must NOT delete the specialized subagent types file.
-
-        Regression test for: agent_a gets 'Available subagent types: (none configured)'
-        because the file was deleted before the MCP server process could read it.
-        """
-        import json
-
-        from massgen.mcp_tools.subagent import _subagent_mcp_server as server
-
-        server._manager = None
-        server._workspace_path = None
-
-        # Write a real specialized types file
-        types_file = tmp_path / "specialized_types.json"
-        types_data = [
-            {
-                "name": "novelty",
-                "description": "Novelty direction finder",
-                "system_prompt": "You suggest novel directions.",
-                "skills": [],
-            },
-        ]
-        types_file.write_text(json.dumps(types_data))
-
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            [
-                "subagent-server",
-                "--agent-id",
-                "agent_a",
-                "--orchestrator-id",
-                "orch_1",
-                "--workspace-path",
-                str(tmp_path),
-                "--specialized-subagents-file",
-                str(types_file),
-            ],
-        )
-
-        await server.create_server()
-
-        # File must still exist — no race condition
-        assert types_file.exists(), "MCP server deleted the specialized types file"
-        # And the types should have been loaded
-        assert "novelty" in server._specialized_subagents
 
     @pytest.mark.asyncio
     async def test_all_config_files_persist_after_create_server(self, monkeypatch, tmp_path):
@@ -437,6 +617,232 @@ class TestSpecializedTypesFileNotDeleted:
         assert agent_configs_file.exists(), "MCP server deleted agent_configs file"
         assert context_paths_file.exists(), "MCP server deleted context_paths file"
         assert coordination_config_file.exists(), "MCP server deleted coordination_config file"
+
+    @pytest.mark.asyncio
+    async def test_agent_temporary_workspace_is_passed_to_manager(self, monkeypatch, tmp_path):
+        """Server should forward --agent-temporary-workspace to SubagentManager."""
+        from massgen.mcp_tools.subagent import _subagent_mcp_server as server
+
+        server._manager = None
+        server._workspace_path = None
+
+        temp_workspace = (tmp_path / "temp_workspaces" / "agent_a").resolve()
+        temp_workspace.mkdir(parents=True, exist_ok=True)
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "subagent-server",
+                "--agent-id",
+                "agent_a",
+                "--orchestrator-id",
+                "orch_1",
+                "--workspace-path",
+                str(tmp_path),
+                "--agent-temporary-workspace",
+                str(temp_workspace),
+            ],
+        )
+
+        await server.create_server()
+        manager = server._get_manager()
+
+        assert manager._agent_temporary_workspace is not None
+        assert manager._agent_temporary_workspace.resolve() == temp_workspace
+
+    @pytest.mark.asyncio
+    async def test_missing_agent_configs_file_falls_back_to_temp_workspace_snapshot(self, monkeypatch, tmp_path):
+        """If primary agent-config path is missing, server should load from temp workspace snapshot copy."""
+        import json
+
+        from massgen.mcp_tools.subagent import _subagent_mcp_server as server
+
+        server._manager = None
+        server._workspace_path = None
+        server._parent_agent_configs = []
+
+        workspace = tmp_path / "workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+
+        temp_workspace = tmp_path / "temp_workspaces" / "agent_a"
+        snapshot_mcp_dir = temp_workspace / "agent1" / ".massgen" / "subagent_mcp"
+        snapshot_mcp_dir.mkdir(parents=True, exist_ok=True)
+        snapshot_payload = [
+            {
+                "id": "agent_a",
+                "backend": {
+                    "type": "codex",
+                    "enable_mcp_command_line": True,
+                    "command_line_execution_mode": "docker",
+                },
+            },
+        ]
+        (snapshot_mcp_dir / "agent_a_agent_configs.json").write_text(json.dumps(snapshot_payload))
+
+        missing_primary_path = workspace / ".massgen" / "subagent_mcp" / "agent_a_agent_configs.json"
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "subagent-server",
+                "--agent-id",
+                "agent_a",
+                "--orchestrator-id",
+                "orch_1",
+                "--workspace-path",
+                str(workspace),
+                "--agent-temporary-workspace",
+                str(temp_workspace),
+                "--agent-configs-file",
+                str(missing_primary_path),
+            ],
+        )
+
+        await server.create_server()
+
+        assert server._parent_agent_configs
+        assert server._parent_agent_configs[0]["backend"]["enable_mcp_command_line"] is True
+        assert server._parent_agent_configs[0]["backend"]["command_line_execution_mode"] == "docker"
+
+    @pytest.mark.asyncio
+    async def test_missing_coordination_config_file_falls_back_to_temp_workspace_snapshot(self, monkeypatch, tmp_path):
+        """If primary coordination config path is missing, server should load from temp workspace snapshot copy."""
+        import json
+
+        from massgen.mcp_tools.subagent import _subagent_mcp_server as server
+
+        server._manager = None
+        server._workspace_path = None
+        server._parent_coordination_config = {}
+
+        workspace = tmp_path / "workspace"
+        workspace.mkdir(parents=True, exist_ok=True)
+
+        temp_workspace = tmp_path / "temp_workspaces" / "agent_a"
+        snapshot_mcp_dir = temp_workspace / "agent1" / ".massgen" / "subagent_mcp"
+        snapshot_mcp_dir.mkdir(parents=True, exist_ok=True)
+        snapshot_payload = {
+            "enable_agent_task_planning": True,
+            "task_planning_filesystem_mode": True,
+            "use_skills": True,
+        }
+        (snapshot_mcp_dir / "agent_a_coordination_config.json").write_text(json.dumps(snapshot_payload))
+
+        missing_primary_path = workspace / ".massgen" / "subagent_mcp" / "agent_a_coordination_config.json"
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "subagent-server",
+                "--agent-id",
+                "agent_a",
+                "--orchestrator-id",
+                "orch_1",
+                "--workspace-path",
+                str(workspace),
+                "--agent-temporary-workspace",
+                str(temp_workspace),
+                "--coordination-config-file",
+                str(missing_primary_path),
+            ],
+        )
+
+        await server.create_server()
+
+        assert server._parent_coordination_config
+        assert server._parent_coordination_config["enable_agent_task_planning"] is True
+        assert server._parent_coordination_config["task_planning_filesystem_mode"] is True
+
+
+class TestLazySubagentTypeLoading:
+    """Lazy loading of specialized subagent types from workspace SUBAGENT.md dirs."""
+
+    def _make_subagent_dir(self, parent: "Path", name: str, description: str, system_prompt: str = "", skills: list | None = None) -> None:  # type: ignore[name-defined]  # noqa: F821
+        type_dir = parent / name
+        type_dir.mkdir(parents=True, exist_ok=True)
+        skills_line = f"skills: {skills!r}\n" if skills else ""
+        content = f"---\nname: {name}\ndescription: {description!r}\n{skills_line}---\n{system_prompt}"
+        (type_dir / "SUBAGENT.md").write_text(content)
+
+    @pytest.mark.asyncio
+    async def test_lazy_loading_populates_types_from_workspace_dirs(self, monkeypatch, tmp_path):
+        """_ensure_specialized_types_loaded() scans workspace/.massgen/subagent_types/ on first call."""
+        from massgen.mcp_tools.subagent import _subagent_mcp_server as server
+
+        # Write SUBAGENT.md dirs into the workspace
+        types_dir = tmp_path / ".massgen" / "subagent_types"
+        self._make_subagent_dir(types_dir, "builder", "Builds things", "You are a builder.", ["file-search"])
+        self._make_subagent_dir(types_dir, "critic", "Critiques output", "You are a critic.")
+
+        # Set up clean state
+        server._specialized_subagents = {}
+        server._subagent_types_loaded = False
+        server._workspace_path = tmp_path
+
+        server._ensure_specialized_types_loaded()
+
+        assert "builder" in server._specialized_subagents
+        assert "critic" in server._specialized_subagents
+        assert server._specialized_subagents["builder"]["system_prompt"] == "You are a builder."
+        assert server._specialized_subagents["builder"]["skills"] == ["file-search"]
+        assert server._specialized_subagents["critic"]["system_prompt"] == "You are a critic."
+
+    @pytest.mark.asyncio
+    async def test_lazy_loading_warns_when_types_dir_missing(self, monkeypatch, tmp_path, caplog):
+        """Missing subagent_types dir logs a warning but does not crash."""
+        import logging
+
+        from massgen.mcp_tools.subagent import _subagent_mcp_server as server
+
+        server._specialized_subagents = {}
+        server._subagent_types_loaded = False
+        server._workspace_path = tmp_path  # no .massgen/subagent_types subdir
+
+        with caplog.at_level(logging.WARNING):
+            server._ensure_specialized_types_loaded()
+
+        assert server._specialized_subagents == {}
+        assert server._subagent_types_loaded is True  # flag set even on miss
+
+    @pytest.mark.asyncio
+    async def test_spawn_with_no_types_dir_reports_none_configured(self, monkeypatch, tmp_path):
+        """spawn_subagents returns '(none configured)' when no SUBAGENT.md dirs exist."""
+        server, handler = await _build_spawn_subagents_handler(monkeypatch, tmp_path)
+        fake_manager = _FakeSubagentManager()
+        monkeypatch.setattr(server, "_get_manager", lambda: fake_manager)
+
+        result = await _invoke_handler(
+            handler,
+            tasks=[{"task": "Build site", "subagent_type": "builder", "context_paths": []}],
+            background=True,
+            refine=False,
+        )
+
+        assert result["success"] is False
+        assert "builder" in result["error"]
+        assert "(none configured)" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_double_scan_prevented_by_flag(self, monkeypatch, tmp_path):
+        """_ensure_specialized_types_loaded() is a no-op when _subagent_types_loaded is True."""
+        from massgen.mcp_tools.subagent import _subagent_mcp_server as server
+
+        server._specialized_subagents = {"evaluator": {"name": "evaluator"}}
+        server._subagent_types_loaded = True
+        server._workspace_path = tmp_path
+
+        # Even with a types dir present, should not scan again
+        types_dir = tmp_path / ".massgen" / "subagent_types"
+        self._make_subagent_dir(types_dir, "builder", "Builds things")
+
+        server._ensure_specialized_types_loaded()
+
+        # builder should NOT be present — scan was skipped
+        assert "builder" not in server._specialized_subagents
+        assert "evaluator" in server._specialized_subagents
 
 
 class TestSpawnSubagentsSpecializedTypeResolution:
@@ -899,6 +1305,87 @@ class TestBackgroundSpawning:
         """Test that sync mode blocks until all subagents complete."""
         # This is a behavioral test - sync should wait for all results
         pass  # Will verify against implementation
+
+
+# =============================================================================
+# Cancel Subagent Registry Persistence Tests
+# =============================================================================
+
+
+class TestCancelSubagentRegistryPersistence:
+    """cancel_subagent MCP tool must persist cancelled status to filesystem registry."""
+
+    @pytest.mark.asyncio
+    async def test_cancel_writes_cancelled_status_to_registry(self, monkeypatch, tmp_path):
+        """After cancel_subagent MCP call, _registry.json must show cancelled status.
+
+        Regression test: stale registry (showing 'running') caused delegated builders
+        to appear active in subsequent rounds after being cancelled.
+        """
+        import json
+
+        server, mcp = await _build_subagent_server(monkeypatch, tmp_path)
+
+        cancel_handler = None
+        for tool in mcp._tool_manager._tools.values():
+            if tool.name == "cancel_subagent":
+                cancel_handler = tool.fn
+                break
+        assert cancel_handler is not None, "cancel_subagent tool not found"
+
+        class _FakeCancelManager:
+            async def cancel_subagent(self, subagent_id):  # noqa: ANN001
+                return {"success": True, "subagent_id": subagent_id, "status": "cancelled"}
+
+            def list_subagents(self):
+                return [{"subagent_id": "build_member_architecture", "status": "cancelled"}]
+
+        monkeypatch.setattr(server, "_get_manager", lambda: _FakeCancelManager())
+
+        result = await _invoke_handler(cancel_handler, subagent_id="build_member_architecture")
+        assert result["success"] is True
+
+        # Registry must be written with cancelled status so fresh MCP processes
+        # (new Codex round) don't show cancelled builders as 'running'.
+        registry_file = tmp_path / "subagents" / "_registry.json"
+        assert registry_file.exists(), "Registry file must be written after cancel"
+        registry = json.loads(registry_file.read_text())
+        entries = registry.get("subagents", [])
+        assert len(entries) == 1
+        assert entries[0]["subagent_id"] == "build_member_architecture"
+        assert entries[0]["status"] == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_cancel_registry_not_written_on_failure(self, monkeypatch, tmp_path):
+        """Registry should not be written when cancel fails (manager returns success=False)."""
+        import json
+
+        server, mcp = await _build_subagent_server(monkeypatch, tmp_path)
+
+        cancel_handler = None
+        for tool in mcp._tool_manager._tools.values():
+            if tool.name == "cancel_subagent":
+                cancel_handler = tool.fn
+                break
+        assert cancel_handler is not None
+
+        class _FakeFailManager:
+            async def cancel_subagent(self, subagent_id):  # noqa: ANN001
+                return {"success": False, "error": "Subagent not found: no-such-id"}
+
+            def list_subagents(self):
+                return []
+
+        monkeypatch.setattr(server, "_get_manager", lambda: _FakeFailManager())
+
+        result = await _invoke_handler(cancel_handler, subagent_id="no-such-id")
+        assert result["success"] is False
+
+        registry_file = tmp_path / "subagents" / "_registry.json"
+        # Registry should not be written (or if written, should show empty list)
+        if registry_file.exists():
+            registry = json.loads(registry_file.read_text())
+            assert registry.get("subagents", []) == []
 
 
 # =============================================================================

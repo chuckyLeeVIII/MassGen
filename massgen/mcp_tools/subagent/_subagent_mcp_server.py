@@ -34,6 +34,7 @@ _manager: SubagentManager | None = None
 
 # Server configuration
 _workspace_path: Path | None = None
+_agent_temporary_workspace: str | None = None
 _parent_agent_id: str | None = None
 _orchestrator_id: str | None = None
 _parent_agent_configs: list[dict[str, Any]] = []
@@ -46,9 +47,114 @@ _max_timeout: int = 600
 _subagent_runtime_mode: str = "isolated"
 _subagent_runtime_fallback_mode: str | None = None
 _subagent_host_launch_prefix: list[str] = []
+_delegation_directory: str | None = None
 _parent_context_paths: list[dict[str, str]] = []
 _parent_coordination_config: dict[str, Any] = {}
 _specialized_subagents: dict[str, dict[str, Any]] = {}  # name -> type config dict
+_subagent_types_loaded: bool = False  # set to True after first lazy scan
+_next_subagent_index: int = 0  # auto-increment counter for default subagent IDs
+
+
+def _find_temp_workspace_mcp_fallback(file_name: str) -> Path | None:
+    """Find a subagent MCP config file copied into agent temp workspace snapshots.
+
+    During round transitions, workspace branch switches may remove
+    workspace/.massgen/subagent_mcp/* before lazy MCP startup. Snapshot copies
+    under agent temp workspace remain available and are safe fallback sources.
+    """
+    if not _agent_temporary_workspace:
+        return None
+
+    temp_root = Path(_agent_temporary_workspace)
+    if not temp_root.exists() or not temp_root.is_dir():
+        return None
+
+    candidates = [path for path in temp_root.glob(f"*/.massgen/subagent_mcp/{file_name}") if path.is_file()]
+    if not candidates:
+        return None
+
+    try:
+        candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    except OSError:
+        candidates.sort(reverse=True)
+
+    return candidates[0]
+
+
+def _load_json_with_temp_workspace_fallback(path_str: str) -> tuple[Any, Path]:
+    """Load JSON from primary path, falling back to temp workspace snapshot copy."""
+    primary = Path(path_str)
+    try:
+        with open(primary) as f:
+            return json.load(f), primary
+    except json.JSONDecodeError:
+        raise
+    except (FileNotFoundError, OSError) as primary_err:
+        fallback = _find_temp_workspace_mcp_fallback(primary.name)
+        if fallback is None:
+            raise primary_err
+        with open(fallback) as f:
+            return json.load(f), fallback
+
+
+def _ensure_specialized_types_loaded() -> None:
+    """Lazily scan workspace for SUBAGENT.md dirs on first call to spawn_subagents.
+
+    Parsed using only stdlib + PyYAML to stay independent of the massgen package,
+    since the fastmcp subprocess may run under a Python that can partially import
+    massgen but lacks some of its transitive dependencies (e.g. gitpython).
+    """
+    global _specialized_subagents, _subagent_types_loaded
+    if _subagent_types_loaded:
+        return
+    _subagent_types_loaded = True
+    if _workspace_path is None:
+        return
+    types_dir = _workspace_path / ".massgen" / "subagent_types"
+    if not types_dir.is_dir():
+        logger.warning(f"[SubagentMCP] subagent_types dir not found: {types_dir}")
+        return
+    try:
+        import re
+
+        import yaml
+
+        loaded = 0
+        for type_path in sorted(types_dir.iterdir()):
+            if not type_path.is_dir():
+                continue
+            md_file = type_path / "SUBAGENT.md"
+            if not md_file.exists():
+                continue
+            try:
+                content = md_file.read_text(encoding="utf-8")
+                # Extract YAML frontmatter between --- delimiters
+                fm_match = re.match(r"^---\n(.*?)\n---\n?", content, re.DOTALL)
+                if not fm_match:
+                    logger.warning(f"[SubagentMCP] No frontmatter in {md_file}")
+                    continue
+                metadata = yaml.safe_load(fm_match.group(1)) or {}
+                description = metadata.get("description", "")
+                if not description:
+                    logger.warning(f"[SubagentMCP] No description in {md_file}, skipping")
+                    continue
+                # System prompt is everything after the closing ---
+                sp_match = re.match(r"^---\n.*?\n---\n?(.*)", content, re.DOTALL)
+                system_prompt = sp_match.group(1).strip() if sp_match else ""
+                name = str(metadata.get("name", "")).strip() or type_path.name
+                _specialized_subagents[name.lower()] = {
+                    "name": name,
+                    "description": description,
+                    "system_prompt": system_prompt,
+                    "skills": metadata.get("skills") or [],
+                    "expected_input": metadata.get("expected_input") or [],
+                }
+                loaded += 1
+            except Exception as e:
+                logger.warning(f"[SubagentMCP] Failed to parse {md_file}: {e}")
+        logger.info(f"[SubagentMCP] Lazily loaded {loaded} specialized subagent types")
+    except Exception as e:
+        logger.warning(f"[SubagentMCP] Failed to scan subagent types: {e}")
 
 
 def _get_manager() -> SubagentManager:
@@ -70,9 +176,11 @@ def _get_manager() -> SubagentManager:
             max_timeout=_max_timeout,
             parent_context_paths=_parent_context_paths,
             parent_coordination_config=_parent_coordination_config,
+            agent_temporary_workspace=_agent_temporary_workspace,
             subagent_runtime_mode=_subagent_runtime_mode,
             subagent_runtime_fallback_mode=_subagent_runtime_fallback_mode,
             subagent_host_launch_prefix=_subagent_host_launch_prefix,
+            delegation_directory=_delegation_directory,
         )
     return _manager
 
@@ -113,7 +221,8 @@ async def create_server() -> fastmcp.FastMCP:
     global _subagent_orchestrator_config, _log_directory, _parent_context_paths
     global _max_concurrent, _default_timeout, _min_timeout, _max_timeout
     global _subagent_runtime_mode, _subagent_runtime_fallback_mode, _subagent_host_launch_prefix
-    global _parent_coordination_config, _specialized_subagents
+    global _delegation_directory
+    global _parent_coordination_config, _specialized_subagents, _agent_temporary_workspace
 
     parser = argparse.ArgumentParser(description="Subagent MCP Server")
     parser.add_argument(
@@ -133,6 +242,13 @@ async def create_server() -> fastmcp.FastMCP:
         type=str,
         required=True,
         help="Path to parent agent workspace for subagent workspaces",
+    )
+    parser.add_argument(
+        "--agent-temporary-workspace",
+        type=str,
+        required=False,
+        default="",
+        help="Path to parent agent temporary workspace root (read-only shared reference)",
     )
     parser.add_argument(
         "--agent-configs-file",
@@ -194,13 +310,6 @@ async def create_server() -> fastmcp.FastMCP:
         help="Path to JSON file containing parent coordination config",
     )
     parser.add_argument(
-        "--specialized-subagents-file",
-        type=str,
-        required=False,
-        default="",
-        help="Path to JSON file containing specialized subagent type configs",
-    )
-    parser.add_argument(
         "--runtime-mode",
         type=str,
         required=False,
@@ -222,6 +331,13 @@ async def create_server() -> fastmcp.FastMCP:
         help="JSON-encoded command prefix for host-isolated launch in containerized runtimes",
     )
     parser.add_argument(
+        "--delegation-directory",
+        type=str,
+        required=False,
+        default="",
+        help="Path to shared delegation directory for file-based container-to-host subagent launch (delegated mode).",
+    )
+    parser.add_argument(
         "--hook-dir",
         type=str,
         default=None,
@@ -231,6 +347,7 @@ async def create_server() -> fastmcp.FastMCP:
 
     # Set global configuration
     _workspace_path = Path(args.workspace_path)
+    _agent_temporary_workspace = args.agent_temporary_workspace or None
     _parent_agent_id = args.agent_id
     _orchestrator_id = args.orchestrator_id
 
@@ -238,10 +355,17 @@ async def create_server() -> fastmcp.FastMCP:
     _parent_agent_configs = []
     if args.agent_configs_file:
         try:
-            with open(args.agent_configs_file) as f:
-                _parent_agent_configs = json.load(f)
+            _agent_configs_loaded_path: Path | None = None
+            _parent_agent_configs, _agent_configs_loaded_path = _load_json_with_temp_workspace_fallback(
+                args.agent_configs_file,
+            )
             if not isinstance(_parent_agent_configs, list):
                 _parent_agent_configs = [_parent_agent_configs]
+            if _agent_configs_loaded_path and _agent_configs_loaded_path != Path(args.agent_configs_file):
+                logger.info(
+                    "[SubagentMCP] Loaded agent configs via temp workspace fallback: %s",
+                    _agent_configs_loaded_path,
+                )
             # Do NOT delete the file here. The MCP server process may start
             # after a delay (Docker, lazy launch) or be restarted, and early
             # deletion causes a race where the file is gone before it can be
@@ -265,11 +389,18 @@ async def create_server() -> fastmcp.FastMCP:
     _parent_context_paths = []
     if args.context_paths_file:
         try:
-            with open(args.context_paths_file) as f:
-                _parent_context_paths = json.load(f)
+            _context_paths_loaded_path: Path | None = None
+            _parent_context_paths, _context_paths_loaded_path = _load_json_with_temp_workspace_fallback(
+                args.context_paths_file,
+            )
             if not isinstance(_parent_context_paths, list):
                 _parent_context_paths = []
             # Do NOT delete — see agent_configs_file comment above.
+            if _context_paths_loaded_path and _context_paths_loaded_path != Path(args.context_paths_file):
+                logger.info(
+                    "[SubagentMCP] Loaded parent context paths via temp workspace fallback: %s",
+                    _context_paths_loaded_path,
+                )
             logger.info(f"[SubagentMCP] Loaded {len(_parent_context_paths)} parent context paths")
         except (json.JSONDecodeError, FileNotFoundError, OSError) as e:
             logger.warning(f"Failed to load context paths from {args.context_paths_file}: {e}")
@@ -279,33 +410,29 @@ async def create_server() -> fastmcp.FastMCP:
     _parent_coordination_config = {}
     if args.coordination_config_file:
         try:
-            with open(args.coordination_config_file) as f:
-                _parent_coordination_config = json.load(f)
+            _coord_cfg_loaded_path: Path | None = None
+            _parent_coordination_config, _coord_cfg_loaded_path = _load_json_with_temp_workspace_fallback(
+                args.coordination_config_file,
+            )
             if not isinstance(_parent_coordination_config, dict):
                 _parent_coordination_config = {}
             # Do NOT delete — see agent_configs_file comment above.
+            if _coord_cfg_loaded_path and _coord_cfg_loaded_path != Path(args.coordination_config_file):
+                logger.info(
+                    "[SubagentMCP] Loaded parent coordination config via temp workspace fallback: %s",
+                    _coord_cfg_loaded_path,
+                )
             logger.info("[SubagentMCP] Loaded parent coordination config")
         except (json.JSONDecodeError, FileNotFoundError, OSError) as e:
             logger.warning(f"Failed to load coordination config from {args.coordination_config_file}: {e}")
             _parent_coordination_config = {}
 
-    # Parse specialized subagent types from file
+    # Specialized subagent types are loaded lazily on first spawn_subagents call
+    # by _ensure_specialized_types_loaded() scanning workspace/.massgen/subagent_types/.
+    global _specialized_subagents, _subagent_types_loaded, _next_subagent_index
     _specialized_subagents = {}
-    if args.specialized_subagents_file:
-        try:
-            from massgen.subagent.models import SpecializedSubagentConfig
-
-            with open(args.specialized_subagents_file) as f:
-                types_data = json.load(f)
-            if isinstance(types_data, list):
-                for td in types_data:
-                    config = SpecializedSubagentConfig.from_dict(td)
-                    _specialized_subagents[config.name.lower()] = config.to_dict()
-            # Do NOT delete — see agent_configs_file comment above.
-            logger.info(f"[SubagentMCP] Loaded {len(_specialized_subagents)} specialized subagent types")
-        except (ValueError, KeyError, TypeError, json.JSONDecodeError, FileNotFoundError, OSError) as e:
-            logger.warning(f"Failed to load specialized subagent types from {args.specialized_subagents_file}: {e}")
-            _specialized_subagents = {}
+    _subagent_types_loaded = False
+    _next_subagent_index = 0
 
     # Set concurrency and timeout limits
     _max_concurrent = args.max_concurrent
@@ -324,6 +451,7 @@ async def create_server() -> fastmcp.FastMCP:
     except json.JSONDecodeError:
         _subagent_host_launch_prefix = []
         logger.warning("[SubagentMCP] Failed to parse --host-launch-prefix JSON; defaulting to empty list")
+    _delegation_directory = args.delegation_directory if args.delegation_directory else None
 
     # Set up signal handlers for graceful shutdown
     try:
@@ -364,9 +492,10 @@ async def create_server() -> fastmcp.FastMCP:
         1. Maximum {_max_concurrent} tasks per call (will error if exceeded)
         2. CONTEXT.md file MUST exist in workspace before calling this tool
         3. Tasks run SIMULTANEOUSLY - do NOT design tasks that depend on each other
-        4. Each task dict MUST have BOTH "task" and "context_paths" fields
-        5. "context_paths" must be explicit: use [] for no extra context, ["./"] for parent workspace,
-           or specific files/directories for least-privilege access
+        4. Each task dict MUST have "task". "context_paths" is optional (defaults to []).
+        5. Parent workspace is mounted read-only by default (include_parent_workspace=True).
+           Set include_parent_workspace=False for fully isolated research subagents.
+           All mounted paths (parent workspace, context_paths) are always READ-ONLY.
 
         CONTEXT.MD REQUIREMENT:
         Before spawning subagents, you MUST create a CONTEXT.md file in the workspace describing
@@ -381,10 +510,11 @@ async def create_server() -> fastmcp.FastMCP:
         Args:
             tasks: List of task dicts (max {_max_concurrent}). Each MUST have:
                    - "task": (REQUIRED) string describing what to do
-                   - "context_paths": (REQUIRED) explicit list of paths to mount read-only.
-                     Use [] for no extra context (clean research),
-                     ["./"] for entire parent workspace,
-                     or specific paths for least-privilege access.
+                   - "include_parent_workspace": (optional bool, default True) mount parent
+                     workspace read-only. Set False for fully isolated research.
+                   - "context_paths": (optional) extra read-only paths beyond the parent
+                     workspace. Use for peer workspace paths (from Available agent
+                     workspaces section) or other allowed paths. Defaults to [].
                    - "subagent_id": (optional) custom identifier
                    - "context_files": (optional) files to copy into subagent workspace
             background: (optional) If True, spawn subagents in the background and return immediately.
@@ -438,19 +568,27 @@ async def create_server() -> fastmcp.FastMCP:
             # write_file("CONTEXT.md", "Building a Bob Dylan tribute website with biography, discography, songs, and quotes pages")
 
             # BLOCKING: Independent parallel tasks (waits for completion)
+            # Parent workspace is always mounted read-only by default.
             spawn_subagents(
                 tasks=[
-                    {{"task": "Research and write Bob Dylan biography to bio.md", "subagent_id": "bio", "context_paths": []}},
-                    {{"task": "Create discography table in discography.md", "subagent_id": "discog", "context_paths": []}},
-                    {{"task": "List 20 famous songs with years in songs.md", "subagent_id": "songs", "context_paths": []}}
+                    {{"task": "Research and write Bob Dylan biography to bio.md", "subagent_id": "bio"}},
+                    {{"task": "Create discography table in discography.md", "subagent_id": "discog"}},
+                    {{"task": "List 20 famous songs with years in songs.md", "subagent_id": "songs"}}
                 ]
             )
 
-            # BACKGROUND: Spawn subagent and continue working
+            # BACKGROUND: Fully isolated research (no parent workspace access)
             # FIRST: write_file("CONTEXT.md", "Building secure authentication system")
             spawn_subagents(
-                tasks=[{{"task": "Research OAuth 2.0 best practices", "subagent_id": "oauth-research", "context_paths": []}}],
+                tasks=[{{"task": "Research OAuth 2.0 best practices", "subagent_id": "oauth-research",
+                         "include_parent_workspace": False}}],
                 background=True  # Returns immediately, result injected later
+            )
+
+            # Evaluate a peer's deliverable (path from Available agent workspaces)
+            spawn_subagents(
+                tasks=[{{"task": "Evaluate agent1's website", "subagent_id": "eval",
+                         "context_paths": ["/abs/path/temp_workspaces/agent_a/agent1"]}}]
             )
 
             # WRONG: Sequential dependency (task 2 needs task 1's output)
@@ -485,32 +623,48 @@ async def create_server() -> fastmcp.FastMCP:
                         "operation": "spawn_subagents",
                         "error": f"Task at index {i} missing required 'task' field",
                     }
-                if "context_paths" not in task_config:
+                # context_paths is now optional (defaults to []).
+                # Parent workspace is always mounted unless include_parent_workspace=False.
+                context_paths_val = task_config.get("context_paths", [])
+                if context_paths_val is not None and not isinstance(context_paths_val, list):
+                    actual_type = type(context_paths_val).__name__
                     return {
                         "success": False,
                         "operation": "spawn_subagents",
-                        "error": (
-                            f"Task at index {i} missing required 'context_paths' field. "
-                            "Set it explicitly (e.g., [] for no extra context, ['./'] for parent workspace, "
-                            "or specific paths for least-privilege access)."
-                        ),
+                        "error": (f"Task at index {i} has invalid 'context_paths' type: " f"expected list, got {actual_type}. " "Use [] for no extra paths or a list of path strings."),
                     }
-                if not isinstance(task_config.get("context_paths"), list):
-                    actual_type = type(task_config.get("context_paths")).__name__
-                    return {
-                        "success": False,
-                        "operation": "spawn_subagents",
-                        "error": (f"Task at index {i} has invalid 'context_paths' type: expected list, got {actual_type}. " "Use [] for no extra context or a list of path strings."),
-                    }
+                if _workspace_path:
+                    workspace_root = Path(_workspace_path)
+                    for path_str in context_paths_val or []:
+                        resolved = Path(path_str)
+                        if not resolved.is_absolute():
+                            resolved = workspace_root / path_str
+                        if not resolved.exists():
+                            return {
+                                "success": False,
+                                "operation": "spawn_subagents",
+                                "error": (f"Task at index {i} has a non-existent context_path: '{path_str}'. " f"Your workspace is at: {_workspace_path}. " "Check the path exists first."),
+                            }
 
-            # Normalize task IDs
+            # Normalize task IDs using a global counter so IDs are unique
+            # across multiple spawn_subagents calls (not just within one call).
+            # _auto_id marks tasks whose ID was assigned here (not caller-provided),
+            # so we can reclaim the counter slot if the spawn immediately fails.
+            global _next_subagent_index
             normalized_tasks = []
-            for i, t in enumerate(tasks):
-                task_id = t.get("subagent_id", f"subagent_{i}")
+            for t in tasks:
+                if "subagent_id" in t:
+                    task_id = t["subagent_id"]
+                    auto_id = False
+                else:
+                    task_id = f"subagent_{_next_subagent_index}"
+                    _next_subagent_index += 1
+                    auto_id = True
                 normalized_tasks.append(
                     {
                         **t,
                         "subagent_id": task_id,
+                        "_auto_id": auto_id,
                     },
                 )
 
@@ -544,7 +698,8 @@ async def create_server() -> fastmcp.FastMCP:
                     "error": (f"Cannot spawn subagent_id already running: {conflict_text}. " "Use send_message_to_subagent() to steer the existing run, " "or wait/cancel it before spawning again."),
                 }
 
-            # Resolve specialized subagent types
+            # Resolve specialized subagent types (lazy load on first call)
+            _ensure_specialized_types_loaded()
             for t in normalized_tasks:
                 subagent_type = t.get("subagent_type", "")
                 if not subagent_type:
@@ -571,22 +726,36 @@ async def create_server() -> fastmcp.FastMCP:
             logger.info(f"[SubagentMCP] Spawning {len(normalized_tasks)} subagents: {task_ids}")
 
             # Branch based on background mode
+            # Note: background path pops _auto_id per-task; strip from blocking tasks here.
+            if not background:
+                for t in normalized_tasks:
+                    t.pop("_auto_id", None)
+
             if background:
                 # BACKGROUND MODE: Spawn subagents in background and return immediately
                 # Results will be injected via SubagentCompleteHook when they complete
                 spawned = []
                 for task_config in normalized_tasks:
+                    auto_id = task_config.pop("_auto_id", False)
                     # Task is passed as-is; context will be loaded from CONTEXT.md
                     info = manager.spawn_subagent_background(
                         task=task_config["task"],
                         subagent_id=task_config.get("subagent_id"),
                         context_files=task_config.get("context_files"),
-                        context_paths=task_config.get("context_paths"),
+                        context_paths=task_config.get("context_paths") or [],
+                        include_parent_workspace=task_config.get("include_parent_workspace", True),
                         system_prompt=task_config.get("system_prompt"),
                         timeout_seconds=_default_timeout,
                         refine=refine,
                         skills=task_config.get("skills"),
+                        subagent_type=task_config.get("subagent_type") or None,
                     )
+                    # If spawn failed before doing any real work and this was an
+                    # auto-generated ID, free the slot so the retry gets the same ID.
+                    if info.get("status") == "error" and auto_id:
+                        assigned_id = task_config.get("subagent_id", "")
+                        manager.remove_immediately_failed_subagent(assigned_id)
+                        _next_subagent_index -= 1
                     spawned.append(info)
 
                 # Save registry to filesystem
@@ -946,6 +1115,8 @@ async def create_server() -> fastmcp.FastMCP:
                 }
 
             result = await manager.cancel_subagent(subagent_id)
+            if result.get("success"):
+                _save_subagents_to_filesystem()
             return result
 
         except Exception as e:

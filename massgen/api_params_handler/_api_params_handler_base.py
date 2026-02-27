@@ -111,6 +111,7 @@ class APIParamsHandlerBase(ABC):
             "drift_conflict_policy",  # Isolated apply drift resolution policy
             "subagent_types",  # Which subagent types to expose (handled by orchestrator)
             "novelty_injection",  # Novelty pressure level (none/gentle/moderate/aggressive)
+            "learning_capture_mode",  # Learning capture timing (round/final_only)
             # NLIP configuration belongs to MassGen routing, never provider APIs
             "enable_nlip",
             "nlip",
@@ -142,6 +143,8 @@ class APIParamsHandlerBase(ABC):
             "fairness_enabled",
             "fairness_lead_cap_answers",
             "max_midstream_injections_per_round",
+            "max_checklist_calls_per_round",
+            "checklist_first_answer",
         }
 
     def build_base_api_params(

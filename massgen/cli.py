@@ -2785,6 +2785,7 @@ def _parse_coordination_config(coord_cfg: dict[str, Any]) -> "CoordinationConfig
         max_broadcasts_per_agent=coord_cfg.get("max_broadcasts_per_agent", 10),
         task_planning_filesystem_mode=coord_cfg.get("task_planning_filesystem_mode", False),
         enable_memory_filesystem_mode=coord_cfg.get("enable_memory_filesystem_mode", False),
+        learning_capture_mode=coord_cfg.get("learning_capture_mode", "round"),
         compression_target_ratio=coord_cfg.get("compression_target_ratio", 0.20),
         use_skills=coord_cfg.get("use_skills", False),
         massgen_skills=coord_cfg.get("massgen_skills", []),
@@ -2808,6 +2809,9 @@ def _parse_coordination_config(coord_cfg: dict[str, Any]) -> "CoordinationConfig
         enable_changedoc=coord_cfg.get("enable_changedoc", True),
         subagent_types=coord_cfg.get("subagent_types"),
         novelty_injection=coord_cfg.get("novelty_injection", "none"),
+        checklist_criteria_preset=coord_cfg.get("checklist_criteria_preset"),
+        checklist_criteria_inline=coord_cfg.get("checklist_criteria_inline"),
+        resume_from_log=coord_cfg.get("resume_from_log"),
     )
 
 

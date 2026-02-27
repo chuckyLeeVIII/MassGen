@@ -1294,6 +1294,175 @@ class TestNoveltySubagentGuidance:
         assert "novelty" not in result["explanation"].lower()
 
 
+class TestBuilderSubagentGuidance:
+    """Builder subagent guidance in verdict text.
+
+    The builder fires when transformative items are present (T>0) AND builder
+    is enabled — complementary to novelty/critic which fire when T==0.
+    """
+
+    def _make_state(self, **overrides):
+        state = {
+            "terminate_action": "vote",
+            "iterate_action": "new_answer",
+            "has_existing_answers": True,
+            "required": 4,
+            "cutoff": 7,
+            "require_substantiveness": True,
+            "builder_subagent_enabled": True,
+        }
+        state.update(overrides)
+        return state
+
+    def _transformative_substantiveness(self):
+        return {
+            "transformative": ["rebuild layout as era-based chapters", "replace card grids with full-bleed sections"],
+            "structural": [],
+            "incremental": [],
+            "decision_space_exhausted": False,
+            "notes": "Two transformative changes identified",
+        }
+
+    def _incremental_only_substantiveness(self):
+        return {
+            "transformative": [],
+            "structural": ["add timeline connector nodes"],
+            "incremental": ["fix contrast", "increase font size"],
+            "decision_space_exhausted": False,
+            "notes": "Only incremental/structural work",
+        }
+
+    def test_builder_guidance_when_transformative_and_enabled(self):
+        """Builder guidance appears when transformative items present + builder enabled."""
+        items = ["Check 1", "Check 2", "Check 3", "Check 4"]
+        result = evaluate_checklist_submission(
+            scores={
+                "E1": {"score": 6, "reasoning": "gaps"},
+                "E2": {"score": 5, "reasoning": "weak"},
+                "E3": {"score": 7, "reasoning": "ok"},
+                "E4": {"score": 5, "reasoning": "shallow"},
+            },
+            improvements="Rebuild layout and replace card grids",
+            report_path="",
+            items=items,
+            state=self._make_state(),
+            substantiveness=self._transformative_substantiveness(),
+        )
+        assert result["verdict"] == "new_answer"
+        explanation_lower = result["explanation"].lower()
+        assert "builder" in explanation_lower
+        assert "subagent" in explanation_lower
+        assert "background" in explanation_lower
+
+    def test_no_builder_guidance_when_disabled(self):
+        """No builder guidance when builder_subagent_enabled=False."""
+        items = ["Check 1", "Check 2", "Check 3", "Check 4"]
+        result = evaluate_checklist_submission(
+            scores={
+                "E1": {"score": 6, "reasoning": "gaps"},
+                "E2": {"score": 5, "reasoning": "weak"},
+                "E3": {"score": 7, "reasoning": "ok"},
+                "E4": {"score": 5, "reasoning": "shallow"},
+            },
+            improvements="Rebuild layout",
+            report_path="",
+            items=items,
+            state=self._make_state(builder_subagent_enabled=False),
+            substantiveness=self._transformative_substantiveness(),
+        )
+        assert result["verdict"] == "new_answer"
+        assert "builder" not in result["explanation"].lower()
+
+    def test_no_builder_guidance_when_no_transformative_items(self):
+        """No builder guidance when there are no transformative items (only structural/incremental)."""
+        items = ["Check 1", "Check 2", "Check 3", "Check 4"]
+        result = evaluate_checklist_submission(
+            scores={
+                "E1": {"score": 6, "reasoning": "gaps"},
+                "E2": {"score": 5, "reasoning": "weak"},
+                "E3": {"score": 7, "reasoning": "ok"},
+                "E4": {"score": 5, "reasoning": "shallow"},
+            },
+            improvements="Fix some issues",
+            report_path="",
+            items=items,
+            state=self._make_state(),
+            substantiveness=self._incremental_only_substantiveness(),
+        )
+        assert result["verdict"] == "new_answer"
+        assert "builder" not in result["explanation"].lower()
+
+    def test_no_builder_guidance_on_first_answer(self):
+        """No builder guidance on first answer (has_existing_answers=False)."""
+        items = ["Check 1", "Check 2", "Check 3", "Check 4"]
+        result = evaluate_checklist_submission(
+            scores={
+                "E1": {"score": 6, "reasoning": "gaps"},
+                "E2": {"score": 5, "reasoning": "weak"},
+                "E3": {"score": 7, "reasoning": "ok"},
+                "E4": {"score": 5, "reasoning": "shallow"},
+            },
+            improvements="Rebuild everything",
+            report_path="",
+            items=items,
+            state=self._make_state(has_existing_answers=False),
+            substantiveness=self._transformative_substantiveness(),
+        )
+        assert result["verdict"] == "new_answer"
+        assert "builder" not in result["explanation"].lower()
+
+    def test_no_builder_guidance_when_key_absent(self):
+        """When builder_subagent_enabled absent from state, default OFF (safe)."""
+        items = ["Check 1", "Check 2", "Check 3", "Check 4"]
+        state = {
+            "terminate_action": "vote",
+            "iterate_action": "new_answer",
+            "has_existing_answers": True,
+            "required": 4,
+            "cutoff": 7,
+        }
+        result = evaluate_checklist_submission(
+            scores={
+                "E1": {"score": 6, "reasoning": "gaps"},
+                "E2": {"score": 5, "reasoning": "weak"},
+                "E3": {"score": 7, "reasoning": "ok"},
+                "E4": {"score": 5, "reasoning": "shallow"},
+            },
+            improvements="Rebuild layout",
+            report_path="",
+            items=items,
+            state=state,
+            substantiveness=self._transformative_substantiveness(),
+        )
+        assert result["verdict"] == "new_answer"
+        assert "builder" not in result["explanation"].lower()
+
+    def test_builder_and_novelty_are_mutually_exclusive(self):
+        """Builder fires on T>0; novelty fires on T==0 — they don't appear together."""
+        items = ["Check 1", "Check 2", "Check 3", "Check 4"]
+        state = self._make_state(novelty_subagent_enabled=True)
+
+        result = evaluate_checklist_submission(
+            scores={
+                "E1": {"score": 6, "reasoning": "gaps"},
+                "E2": {"score": 5, "reasoning": "weak"},
+                "E3": {"score": 7, "reasoning": "ok"},
+                "E4": {"score": 5, "reasoning": "shallow"},
+            },
+            improvements="Rebuild layout",
+            report_path="",
+            items=items,
+            state=state,
+            substantiveness=self._transformative_substantiveness(),
+        )
+        assert result["verdict"] == "new_answer"
+        explanation_lower = result["explanation"].lower()
+        # Builder fires (T>0)
+        assert "builder" in explanation_lower
+        # Novelty does NOT fire (T>0, so no novelty guidance needed)
+        assert "novelty" not in explanation_lower
+
+
 class TestBuildServerConfig:
     """Tests for build_server_config utility."""
 
@@ -1639,4 +1808,361 @@ class TestDiagnosticReportGate:
             state=state,
         )
         assert result["report_gate_triggered"] is True
+
+
+# ---------------------------------------------------------------------------
+# Per-agent scores format
+# ---------------------------------------------------------------------------
+
+
+class TestPerAgentScores:
+    """Tests for the per-agent scores format where each agent is scored separately."""
+
+    def _base_state(self):
+        return {
+            "terminate_action": "vote",
+            "iterate_action": "new_answer",
+            "has_existing_answers": True,
+            "required": 2,
+            "cutoff": 7,
+            "require_gap_report": False,
+        }
+
+    def test_best_agent_passes_returns_terminate(self):
+        """Best agent's scores clear the bar → vote."""
+        scores = {
+            "agent1": {"E1": {"score": 8, "reasoning": "solid"}, "E2": {"score": 9, "reasoning": "great"}},
+            "agent2": {"E1": {"score": 5, "reasoning": "weak"}, "E2": {"score": 6, "reasoning": "ok"}},
+        }
+        result = evaluate_checklist_submission(
+            scores=scores,
+            improvements="",
+            report_path="",
+            items=["Check 1", "Check 2"],
+            state=self._base_state(),
+        )
+        assert result["verdict"] == "vote"
+        assert result["best_agent"] == "agent1"
+        assert result["true_count"] == 2
+
+    def test_best_agent_fails_returns_iterate(self):
+        """Even the best agent fails a dimension → new_answer."""
+        scores = {
+            "agent1": {"E1": {"score": 8, "reasoning": "good"}, "E2": {"score": 4, "reasoning": "poor"}},
+            "agent2": {"E1": {"score": 6, "reasoning": "ok"}, "E2": {"score": 5, "reasoning": "poor"}},
+        }
+        result = evaluate_checklist_submission(
+            scores=scores,
+            improvements="E2 is weak across all agents",
+            report_path="",
+            items=["Check 1", "Check 2"],
+            state=self._base_state(),
+        )
         assert result["verdict"] == "new_answer"
+        assert result["best_agent"] == "agent1"  # agent1 has higher aggregate
+        assert result["true_count"] == 1
+
+    def test_best_agent_selected_by_aggregate(self):
+        """Agent with highest total score is selected as best."""
+        scores = {
+            "agent1": {"E1": {"score": 9, "reasoning": "great"}, "E2": {"score": 5, "reasoning": "weak"}},
+            "agent2": {"E1": {"score": 7, "reasoning": "good"}, "E2": {"score": 8, "reasoning": "solid"}},
+        }
+        result = evaluate_checklist_submission(
+            scores=scores,
+            improvements="",
+            report_path="",
+            items=["Check 1", "Check 2"],
+            state=self._base_state(),
+        )
+        # agent1 total=14, agent2 total=15 → agent2 wins
+        assert result["best_agent"] == "agent2"
+
+    def test_per_agent_breakdown_included_in_response(self):
+        """Response includes full per-agent score breakdown."""
+        scores = {
+            "agent1": {"E1": {"score": 8, "reasoning": "good"}, "E2": {"score": 9, "reasoning": "great"}},
+            "agent2": {"E1": {"score": 5, "reasoning": "weak"}, "E2": {"score": 6, "reasoning": "ok"}},
+        }
+        result = evaluate_checklist_submission(
+            scores=scores,
+            improvements="",
+            report_path="",
+            items=["Check 1", "Check 2"],
+            state=self._base_state(),
+        )
+        assert "per_agent_scores" in result
+        assert "agent1" in result["per_agent_scores"]
+        assert "agent2" in result["per_agent_scores"]
+
+    def test_flat_scores_still_work_backward_compat(self):
+        """Legacy flat E-keyed scores still produce correct verdicts."""
+        scores = {"E1": {"score": 8, "reasoning": "good"}, "E2": {"score": 9, "reasoning": "great"}}
+        result = evaluate_checklist_submission(
+            scores=scores,
+            improvements="",
+            report_path="",
+            items=["Check 1", "Check 2"],
+            state=self._base_state(),
+        )
+        assert result["verdict"] == "vote"
+        assert result["true_count"] == 2
+        # No best_agent key for flat format
+        assert "best_agent" not in result
+
+    def test_single_agent_per_agent_format(self):
+        """Single agent in per-agent format works correctly."""
+        scores = {
+            "agent1": {"E1": {"score": 8, "reasoning": "good"}, "E2": {"score": 9, "reasoning": "great"}},
+        }
+        result = evaluate_checklist_submission(
+            scores=scores,
+            improvements="",
+            report_path="",
+            items=["Check 1", "Check 2"],
+            state=self._base_state(),
+        )
+        assert result["verdict"] == "vote"
+        assert result["best_agent"] == "agent1"
+
+    def test_per_agent_incomplete_scores_rejected(self):
+        """Per-agent format: best agent missing a criterion triggers rejection."""
+        scores = {
+            "agent1": {"E1": {"score": 8, "reasoning": "good"}},  # missing E2
+            "agent2": {"E1": {"score": 5, "reasoning": "weak"}, "E2": {"score": 6, "reasoning": "ok"}},
+        }
+        result = evaluate_checklist_submission(
+            scores=scores,
+            improvements="",
+            report_path="",
+            items=["Check 1", "Check 2"],
+            state=self._base_state(),
+        )
+        assert result["verdict"] == "new_answer"
+        assert result.get("incomplete_scores") is True
+        assert result["verdict"] == "new_answer"
+
+
+# ---------------------------------------------------------------------------
+# Novelty guidance injection (Step 3 of round lifecycle plan)
+# ---------------------------------------------------------------------------
+
+
+def _make_low_score_state(extra=None):
+    """State that triggers T=0 plateau (no transformative changes identified)."""
+    state = {
+        "terminate_action": "vote",
+        "iterate_action": "new_answer",
+        "has_existing_answers": True,
+        "required": 2,
+        "cutoff": 90,  # high cutoff so scores fail → iterate verdict
+    }
+    if extra:
+        state.update(extra)
+    return state
+
+
+def _low_scores():
+    return {
+        "agent1": {"E1": {"score": 40, "reasoning": "poor"}, "E2": {"score": 40, "reasoning": "poor"}},
+        "agent2": {"E1": {"score": 35, "reasoning": "poor"}, "E2": {"score": 38, "reasoning": "poor"}},
+    }
+
+
+def _t0_substantiveness():
+    """Substantiveness with zero transformative changes to trigger novelty guidance."""
+    return {
+        "transformative": [],
+        "structural": [],
+        "incremental": [],
+        "decision_space_exhausted": False,
+        "notes": "",
+    }
+
+
+class TestNoveltyGuidanceInjection:
+    """Novelty guidance: critic removed, adoption language mandatory."""
+
+    def test_critic_not_in_novelty_guidance_when_both_enabled(self):
+        """When both critic+novelty enabled, injected guidance mentions novelty only (not critic)."""
+        state = _make_low_score_state(
+            {
+                "novelty_subagent_enabled": True,
+                "critic_subagent_enabled": True,
+            },
+        )
+        result = evaluate_checklist_submission(
+            scores=_low_scores(),
+            improvements="",
+            report_path="",
+            items=["Check 1", "Check 2"],
+            state=state,
+            substantiveness=_t0_substantiveness(),
+        )
+        explanation = result["explanation"]
+        # Novelty should be mentioned
+        assert "novelty" in explanation.lower()
+        # Critic must NOT appear as a spawn instruction in the plateau-breaking block
+        assert "spawn a `critic`" not in explanation
+        assert "spawn two background" not in explanation
+
+    def test_novelty_adoption_language_is_mandatory(self):
+        """Injected novelty guidance must contain strong mandatory adoption language."""
+        state = _make_low_score_state({"novelty_subagent_enabled": True})
+        result = evaluate_checklist_submission(
+            scores=_low_scores(),
+            improvements="",
+            report_path="",
+            items=["Check 1", "Check 2"],
+            state=state,
+            substantiveness=_t0_substantiveness(),
+        )
+        explanation = result["explanation"]
+        # Must contain gate-based engagement language (anchoring pattern / evaluate each)
+        assert "anchoring" in explanation.lower() or "evaluate each" in explanation.lower()
+
+    def test_no_novelty_guidance_when_novelty_disabled(self):
+        """No novelty guidance injected when novelty subagent is disabled."""
+        state = _make_low_score_state({"novelty_subagent_enabled": False})
+        result = evaluate_checklist_submission(
+            scores=_low_scores(),
+            improvements="",
+            report_path="",
+            items=["Check 1", "Check 2"],
+            state=state,
+            substantiveness=_t0_substantiveness(),
+        )
+        explanation = result["explanation"]
+        assert "novelty subagent" not in explanation.lower()
+
+    def test_novelty_not_injected_when_transformative_count_positive(self):
+        """Novelty guidance only fires when T=0; skip when transformative items exist."""
+        state = _make_low_score_state({"novelty_subagent_enabled": True})
+        substantiveness = {
+            "transformative": ["Full redesign"],
+            "structural": [],
+            "incremental": [],
+            "decision_space_exhausted": False,
+            "notes": "",
+        }
+        result = evaluate_checklist_submission(
+            scores=_low_scores(),
+            improvements="",
+            report_path="",
+            items=["Check 1", "Check 2"],
+            state=state,
+            substantiveness=substantiveness,
+        )
+        explanation = result["explanation"]
+        # novelty guidance should not mention the "plateau" spawn instruction
+        assert "plateau" not in explanation.lower()
+
+
+# ---------------------------------------------------------------------------
+# Available agent labels enforcement
+# ---------------------------------------------------------------------------
+
+
+class TestAvailableAgentLabelsCoverage:
+    """When available_agent_labels is provided in state, all labels must be scored.
+
+    Regression test: agents were submitting per-agent scores that only covered their
+    own answer (flat or single-agent format), silently omitting peer agents from
+    evaluation.
+    """
+
+    def _base_state(self, **extra):
+        return {
+            "terminate_action": "vote",
+            "iterate_action": "new_answer",
+            "has_existing_answers": True,
+            "required": 2,
+            "cutoff": 7,
+            "require_gap_report": False,
+            **extra,
+        }
+
+    def test_missing_available_agent_triggers_rejection(self):
+        """Scores dict omits an available agent → iterate with clear explanation."""
+        state = self._base_state(available_agent_labels=["agent1", "agent2"])
+        scores = {
+            # Only agent1 scored; agent2 is available but missing
+            "agent1": {"E1": {"score": 8, "reasoning": "good"}, "E2": {"score": 9, "reasoning": "great"}},
+        }
+        result = evaluate_checklist_submission(
+            scores=scores,
+            improvements="",
+            report_path="",
+            items=["Check 1", "Check 2"],
+            state=state,
+        )
+        assert result["verdict"] == "new_answer"
+        assert result.get("incomplete_scores") is True
+        assert "agent2" in result.get("explanation", "").lower()
+
+    def test_all_available_agents_scored_passes(self):
+        """Scoring all available agents succeeds normally."""
+        state = self._base_state(available_agent_labels=["agent1", "agent2"])
+        scores = {
+            "agent1": {"E1": {"score": 8, "reasoning": "good"}, "E2": {"score": 9, "reasoning": "great"}},
+            "agent2": {"E1": {"score": 6, "reasoning": "ok"}, "E2": {"score": 7, "reasoning": "decent"}},
+        }
+        result = evaluate_checklist_submission(
+            scores=scores,
+            improvements="",
+            report_path="",
+            items=["Check 1", "Check 2"],
+            state=state,
+        )
+        assert result["verdict"] == "vote"
+        assert not result.get("incomplete_scores")
+
+    def test_no_available_labels_in_state_no_enforcement(self):
+        """Without available_agent_labels in state, single-agent submission is fine."""
+        state = self._base_state()  # no available_agent_labels key
+        scores = {
+            "agent1": {"E1": {"score": 8, "reasoning": "good"}, "E2": {"score": 9, "reasoning": "great"}},
+        }
+        result = evaluate_checklist_submission(
+            scores=scores,
+            improvements="",
+            report_path="",
+            items=["Check 1", "Check 2"],
+            state=state,
+        )
+        assert result["verdict"] == "vote"
+        assert not result.get("incomplete_scores")
+
+    def test_three_agents_two_missing_rejected(self):
+        """Multiple missing agents all named in error message."""
+        state = self._base_state(available_agent_labels=["agent1", "agent2", "agent3"])
+        scores = {
+            "agent1": {"E1": {"score": 8, "reasoning": "good"}, "E2": {"score": 9, "reasoning": "great"}},
+        }
+        result = evaluate_checklist_submission(
+            scores=scores,
+            improvements="",
+            report_path="",
+            items=["Check 1", "Check 2"],
+            state=state,
+        )
+        assert result["verdict"] == "new_answer"
+        assert result.get("incomplete_scores") is True
+        explanation = result.get("explanation", "").lower()
+        assert "agent2" in explanation
+        assert "agent3" in explanation
+
+    def test_flat_format_with_available_labels_rejected(self):
+        """Flat (non-per-agent) scores with available_agent_labels present → rejected."""
+        state = self._base_state(available_agent_labels=["agent1", "agent2"])
+        # Flat format only covers one implicit answer, not all available agents
+        scores = {"E1": {"score": 8, "reasoning": "good"}, "E2": {"score": 9, "reasoning": "great"}}
+        result = evaluate_checklist_submission(
+            scores=scores,
+            improvements="",
+            report_path="",
+            items=["Check 1", "Check 2"],
+            state=state,
+        )
+        assert result["verdict"] == "new_answer"
+        assert result.get("incomplete_scores") is True

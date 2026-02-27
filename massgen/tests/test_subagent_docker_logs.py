@@ -151,6 +151,8 @@ class TestSubagentMcpConfigEnv:
         orch.orchestrator_id = "test-orch"
         orch._subagent_logs_dir = tmp_path / "logs"
         orch._subagent_logs_dir.mkdir()
+        orch._delegation_dir = None
+        orch._subagent_launch_watcher = None
         # Use spec=[] on config and coordination_config so hasattr() returns
         # False for unset attrs (prevents MagicMock from auto-creating attrs
         # that fail JSON serialization).
@@ -178,6 +180,7 @@ class TestSubagentMcpConfigEnv:
         agent.backend.filesystem_manager = MagicMock()
         agent.backend.filesystem_manager.cwd = str(tmp_path / "workspace")
         Path(agent.backend.filesystem_manager.cwd).mkdir(parents=True, exist_ok=True)
+        agent.backend.filesystem_manager.get_workspace_root = lambda: Path(agent.backend.filesystem_manager.cwd)
 
         return orch, agent
 
@@ -254,6 +257,18 @@ class TestSubagentMcpConfigEnv:
         assert self._get_arg(args, "--runtime-fallback-mode") == "inherited"
         assert json.loads(self._get_arg(args, "--host-launch-prefix")) == ["host-launch", "--exec"]
 
+    def test_subagent_mcp_config_passes_agent_temporary_workspace(self, tmp_path):
+        """Parent agent temporary workspace should be forwarded for subagent path validation."""
+        orch, agent = self._make_orchestrator_and_agent(tmp_path)
+        temp_workspace = (tmp_path / "temp_workspaces" / "agent_a").resolve()
+        temp_workspace.mkdir(parents=True, exist_ok=True)
+        agent.backend.filesystem_manager.agent_temporary_workspace = str(temp_workspace)
+
+        config = orch._create_subagent_mcp_config("test_agent", agent)
+        args = config["args"]
+
+        assert self._get_arg(args, "--agent-temporary-workspace") == str(temp_workspace)
+
     def test_subagent_mcp_config_defaults_fallback_for_codex_docker(self, tmp_path):
         """Codex+Docker should default runtime fallback to inherited when unset."""
         orch, agent = self._make_orchestrator_and_agent(tmp_path)
@@ -291,14 +306,14 @@ class TestSubagentMcpConfigEnv:
     def test_subagent_mcp_config_files_are_created_in_workspace(self, tmp_path, monkeypatch):
         """Temp config files should live in workspace so Docker-mounted MCP can read them."""
         orch, agent = self._make_orchestrator_and_agent(tmp_path)
-        workspace_root = Path(agent.backend.filesystem_manager.cwd).resolve()
+        workspace_root = Path(agent.backend.filesystem_manager.get_workspace_root()).resolve()
 
         # Ensure context-paths temp file is created.
         context_dir = tmp_path / "context"
         context_dir.mkdir()
         agent.backend.config = {"context_paths": [{"path": str(context_dir), "permission": "read"}]}
 
-        # Ensure specialized-subagents temp file is created.
+        # Ensure specialized subagent type dirs are written to workspace.
         monkeypatch.setattr(
             "massgen.subagent.type_scanner.scan_subagent_types",
             lambda **kwargs: [SpecializedSubagentConfig(name="evaluator", description="Evaluates outputs")],
@@ -307,11 +322,11 @@ class TestSubagentMcpConfigEnv:
         config = orch._create_subagent_mcp_config("test_agent", agent)
         args = config["args"]
 
+        # Arg-based temp files must exist and be inside workspace root
         file_flags = [
             "--agent-configs-file",
             "--context-paths-file",
             "--coordination-config-file",
-            "--specialized-subagents-file",
         ]
 
         for flag in file_flags:
@@ -320,6 +335,40 @@ class TestSubagentMcpConfigEnv:
             path = Path(path_str).resolve()
             assert str(path).startswith(str(workspace_root))
             assert path.exists()
+
+        # Specialized subagent types are delivered via SUBAGENT.md dirs in the workspace
+        assert "--specialized-subagents-file" not in args
+        type_dir = workspace_root / ".massgen" / "subagent_types" / "evaluator"
+        assert type_dir.is_dir()
+        assert (type_dir / "SUBAGENT.md").exists()
+
+    def test_subagent_mcp_config_files_use_persistent_workspace_root_after_workspace_switch(self, tmp_path, monkeypatch):
+        """Subagent MCP config files should always use persistent workspace root, not active cwd."""
+        orch, agent = self._make_orchestrator_and_agent(tmp_path)
+        persistent_root = tmp_path / "workspace_root"
+        temp_workspace = tmp_path / "temp_workspace"
+        persistent_root.mkdir(parents=True, exist_ok=True)
+        temp_workspace.mkdir(parents=True, exist_ok=True)
+
+        agent.backend.filesystem_manager.cwd = str(temp_workspace)
+        agent.backend.filesystem_manager.get_workspace_root = lambda: persistent_root
+
+        monkeypatch.setattr(
+            "massgen.subagent.type_scanner.scan_subagent_types",
+            lambda **kwargs: [SpecializedSubagentConfig(name="critic", description="Critiques outputs")],
+        )
+
+        config = orch._create_subagent_mcp_config("test_agent", agent)
+        args = config["args"]
+
+        assert self._get_arg(args, "--workspace-path") == str(persistent_root.resolve())
+
+        # Specialized types are written as SUBAGENT.md dirs into the persistent workspace root
+        assert "--specialized-subagents-file" not in args
+        type_dir = (persistent_root / ".massgen" / "subagent_types" / "critic").resolve()
+        assert str(type_dir).startswith(str(persistent_root.resolve()))
+        assert type_dir.is_dir()
+        assert (type_dir / "SUBAGENT.md").exists()
 
     def test_subagent_mcp_config_raises_on_invalid_specialized_profile(self, tmp_path, monkeypatch):
         """Schema errors in specialized profiles should surface as explicit failures."""
@@ -390,10 +439,12 @@ class TestPlanningMcpConfigHooks:
         coord_cfg.task_planning_filesystem_mode = True
         coord_cfg.use_skills = False
         coord_cfg.enable_memory_filesystem_mode = False
+        coord_cfg.learning_capture_mode = "round"
         coord_cfg.use_two_tier_workspace = False
 
         orch.config = MagicMock(spec=[])
         orch.config.coordination_config = coord_cfg
+        orch.config.skip_final_presentation = False
 
         agent = MagicMock()
         agent.backend = MagicMock(spec=[])
@@ -426,3 +477,46 @@ class TestPlanningMcpConfigHooks:
         config = orch._create_planning_mcp_config("agent_a", agent)
 
         assert "--hook-dir" not in config["args"]
+
+    def test_planning_mcp_config_includes_learning_flags_in_round_mode(self, tmp_path):
+        """Round mode should keep auto-injected evolving-skill and memory planning flags."""
+        orch, agent = self._make_orchestrator_and_agent(tmp_path)
+        orch.config.coordination_config.enable_memory_filesystem_mode = True
+        orch.config.coordination_config.learning_capture_mode = "round"
+        agent.backend.config = {"auto_discover_custom_tools": True}
+        agent.backend.supports_mcp_server_hooks = MagicMock(return_value=False)
+
+        config = orch._create_planning_mcp_config("agent_a", agent)
+        args = config["args"]
+
+        assert "--auto-discovery-enabled" in args
+        assert "--memory-enabled" in args
+
+    def test_planning_mcp_config_omits_learning_flags_in_final_only_mode(self, tmp_path):
+        """final_only should disable round-time evolving-skill/memory auto-injection."""
+        orch, agent = self._make_orchestrator_and_agent(tmp_path)
+        orch.config.coordination_config.enable_memory_filesystem_mode = True
+        orch.config.coordination_config.learning_capture_mode = "final_only"
+        agent.backend.config = {"auto_discover_custom_tools": True}
+        agent.backend.supports_mcp_server_hooks = MagicMock(return_value=False)
+
+        config = orch._create_planning_mcp_config("agent_a", agent)
+        args = config["args"]
+
+        assert "--auto-discovery-enabled" not in args
+        assert "--memory-enabled" not in args
+
+    def test_planning_mcp_config_keeps_learning_flags_when_final_is_skipped(self, tmp_path):
+        """final_only should fall back to round flags when skip_final_presentation is active."""
+        orch, agent = self._make_orchestrator_and_agent(tmp_path)
+        orch.config.coordination_config.enable_memory_filesystem_mode = True
+        orch.config.coordination_config.learning_capture_mode = "final_only"
+        orch.config.skip_final_presentation = True
+        agent.backend.config = {"auto_discover_custom_tools": True}
+        agent.backend.supports_mcp_server_hooks = MagicMock(return_value=False)
+
+        config = orch._create_planning_mcp_config("agent_a", agent)
+        args = config["args"]
+
+        assert "--auto-discovery-enabled" in args
+        assert "--memory-enabled" in args

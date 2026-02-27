@@ -329,6 +329,41 @@ def _evaluate_gap_report(report_path: str, state: dict[str, Any]) -> dict[str, A
     return result
 
 
+def _is_per_agent_scores(scores: dict[str, Any], item_prefix: str) -> bool:
+    """Return True if scores is per-agent format (keyed by agent label, not E/T-prefixed)."""
+    if not scores:
+        return False
+    return not any(k.startswith(item_prefix) or k.startswith("T") or k.startswith("E") for k in scores)
+
+
+def _extract_flat_scores(
+    per_agent: dict[str, Any],
+    item_prefix: str,
+    n_items: int,
+) -> tuple[str, dict[str, Any], dict[str, dict[str, int]]]:
+    """Find the best agent by aggregate score and return (best_label, flat_scores, per_agent_summary).
+
+    per_agent_summary maps agent_label -> {criterion: score} for inclusion in the response.
+    """
+    per_agent_summary: dict[str, dict[str, int]] = {}
+    best_label = ""
+    best_total = -1
+    best_scores: dict[str, Any] = {}
+
+    for agent_label, agent_scores in per_agent.items():
+        if not isinstance(agent_scores, dict):
+            continue
+        total = sum(_extract_score(agent_scores.get(f"{item_prefix}{i+1}", agent_scores.get(f"E{i+1}", 0))) for i in range(n_items))
+        summary = {f"{item_prefix}{i+1}": _extract_score(agent_scores.get(f"{item_prefix}{i+1}", agent_scores.get(f"E{i+1}", 0))) for i in range(n_items)}
+        per_agent_summary[agent_label] = summary
+        if total > best_total:
+            best_total = total
+            best_label = agent_label
+            best_scores = agent_scores
+
+    return best_label, best_scores, per_agent_summary
+
+
 def evaluate_checklist_submission(
     scores: dict[str, Any],
     improvements: str,
@@ -350,6 +385,83 @@ def evaluate_checklist_submission(
     # Determine item prefix: use E-prefix (new default), but accept T-prefix
     # submissions for backwards compatibility
     item_prefix = state.get("item_prefix", "E")
+
+    # Detect per-agent format and normalise to flat scores for verdict logic.
+    # Per-agent: {"agent1": {"E1": ..., "E2": ...}, "agent2": {...}}
+    # Flat (legacy): {"E1": ..., "E2": ...}
+    best_agent: str | None = None
+    per_agent_scores: dict[str, dict[str, int]] | None = None
+    available_agent_labels: list[str] = state.get("available_agent_labels") or []
+    if _is_per_agent_scores(scores, item_prefix):
+        # Validate completeness for ALL agents before selecting best.
+        expected_keys = {f"{item_prefix}{i+1}" for i in range(len(items))}
+        incomplete_agents = []
+        for agent_label, agent_scores in scores.items():
+            if not isinstance(agent_scores, dict):
+                continue
+            agent_keys = {k.replace("T", item_prefix, 1) if k.startswith("T") else k for k in agent_scores}
+            missing = sorted(expected_keys - agent_keys)
+            if missing:
+                incomplete_agents.append((agent_label, missing))
+        if incomplete_agents and has_existing_answers:
+            report_eval = _evaluate_gap_report(report_path, state)
+            details = "; ".join(f"{a}: missing {', '.join(m)}" for a, m in incomplete_agents)
+            return {
+                "verdict": iterate_action,
+                "explanation": (f"Incomplete per-agent submission: {details}. " f"You must score ALL {len(items)} criteria for EVERY agent. " f"Resubmit with complete scores."),
+                "incomplete_scores": True,
+                "true_count": 0,
+                "required": required,
+                "items": [],
+                "report": report_eval,
+                "report_gate_triggered": False,
+                "substantiveness_gate_triggered": False,
+                "convergence_offramp_triggered": False,
+            }
+        # Validate all available agents are covered when labels are known.
+        if available_agent_labels and has_existing_answers:
+            missing_agents = sorted(set(available_agent_labels) - set(scores.keys()))
+            if missing_agents:
+                report_eval = _evaluate_gap_report(report_path, state)
+                return {
+                    "verdict": iterate_action,
+                    "explanation": (
+                        f"Missing scores for available agents: {', '.join(missing_agents)}. "
+                        f"You must score ALL agents you have context for: "
+                        f"{', '.join(sorted(available_agent_labels))}. "
+                        f"Resubmit with per-agent scores covering every agent."
+                    ),
+                    "incomplete_scores": True,
+                    "true_count": 0,
+                    "required": required,
+                    "items": [],
+                    "report": report_eval,
+                    "report_gate_triggered": False,
+                    "substantiveness_gate_triggered": False,
+                    "convergence_offramp_triggered": False,
+                }
+        best_agent, scores, per_agent_scores = _extract_flat_scores(scores, item_prefix, len(items))
+    elif len(available_agent_labels) >= 2 and has_existing_answers:
+        # Flat format submitted but multiple agents are available — require per-agent format.
+        report_eval = _evaluate_gap_report(report_path, state)
+        return {
+            "verdict": iterate_action,
+            "explanation": (
+                f"You submitted flat scores but you have {len(available_agent_labels)} agents available "
+                f"({', '.join(sorted(available_agent_labels))}). "
+                f"Use per-agent format to score ALL available agents: "
+                f'{{"{available_agent_labels[0]}": {{"E1": {{"score": N, "reasoning": "..."}}, ...}}, '
+                f'"{available_agent_labels[1]}": {{...}}}}.'
+            ),
+            "incomplete_scores": True,
+            "true_count": 0,
+            "required": required,
+            "items": [],
+            "report": report_eval,
+            "report_gate_triggered": False,
+            "substantiveness_gate_triggered": False,
+            "convergence_offramp_triggered": False,
+        }
 
     # Reject incomplete submissions — agent must score ALL criteria
     expected_keys = {f"{item_prefix}{i+1}" for i in range(len(items))}
@@ -490,6 +602,24 @@ def evaluate_checklist_submission(
                     "easier work — deliver exactly what you committed to. "
                 )
 
+            # Builder subagent guidance: when transformative changes are identified,
+            # suggest delegating implementation to a builder subagent rather than
+            # doing the work inline. Transformative = fundamental rethink = substantial
+            # implementation effort, the right trigger for offloading to fresh context.
+            # Complementary to novelty/critic (those fire when transformative_count == 0;
+            # builder fires when transformative_count > 0).
+            _builder_enabled = state.get("builder_subagent_enabled", False)
+            if _builder_enabled and has_existing_answers and transformative_items:
+                explanation += (
+                    "These are transformative changes — delegate implementation to a "
+                    "`builder` subagent (background=True) rather than doing the work "
+                    "inline. Pass the builder: the current workspace, a prescriptive "
+                    "spec with what to build AND what patterns are FORBIDDEN (negative "
+                    "constraints), and the evaluation criteria. The builder runs in "
+                    "fresh context and won't exhaust your token budget. Once it reports "
+                    "back, you evaluate the result and submit the checklist. "
+                )
+
             # Stretch-item guidance: when stretch criteria fail, give concrete direction
             stretch_failures = failed_set & tail_failure_ids
             if stretch_failures and substantiveness_eval.get("valid", False):
@@ -516,38 +646,24 @@ def evaluate_checklist_submission(
             # Novelty subagent guidance: when no transformative work identified,
             # suggest spawning a novelty subagent to break anchoring
             _novelty_enabled = state.get("novelty_subagent_enabled", False)
-            _critic_enabled = state.get("critic_subagent_enabled", False)
             if has_existing_answers and substantiveness_eval.get("valid", False) and substantiveness_eval.get("transformative_count", 0) == 0:
-                if _novelty_enabled and _critic_enabled:
+                if _novelty_enabled:
                     explanation += (
-                        "Before starting your next iteration, spawn two background "
-                        "subagents in parallel: "
-                        "1. A `critic` subagent: pass it the current answer, all "
-                        "previous answers, and the evaluation criteria. It will provide "
-                        "honest external assessment. "
-                        "2. A `novelty` subagent: pass it your diagnostic analysis and "
-                        "current workspace. It will propose fundamentally different "
-                        "directions. "
-                        "Wait for both results before committing to your improvement "
-                        "strategy. "
-                    )
-                elif _novelty_enabled:
-                    explanation += (
-                        "Your evaluation found zero transformative changes. To break through "
-                        "this plateau, spawn a novelty subagent in the background — pass it "
-                        "your diagnostic analysis, the current workspace, and evaluation "
-                        "findings. The novelty subagent will propose fundamentally different "
-                        "directions while you continue working on any structural or "
-                        "incremental improvements already identified. When its results "
-                        "arrive, incorporate at least one transformative suggestion into "
-                        "your work. "
-                    )
-                elif _critic_enabled:
-                    explanation += (
-                        "Before starting your next iteration, spawn a `critic` subagent "
-                        "in the background — pass it the current answer, all previous "
-                        "answers, and the evaluation criteria. The critic will provide "
-                        "honest external assessment to guide your improvements. "
+                        "Your evaluation found zero transformative changes — you are "
+                        "stuck in a plateau. Spawn a novelty subagent in the background "
+                        "(`background=True, refine=False`) — pass it your diagnostic "
+                        "analysis, the current workspace, and evaluation findings. It "
+                        "will propose fundamentally different directions while you "
+                        "continue working on structural or incremental improvements "
+                        "already identified. When its results arrive, evaluate each "
+                        "direction: does it genuinely break the anchoring pattern? Is "
+                        "it implementable? Does it differ from what's already been "
+                        "tried? If at least one passes, adopt it and list it in the "
+                        "`transformative` array of your next checklist submission. If "
+                        "none pass, explain in `substantiveness.notes` which direction "
+                        "failed and why — not just 'none apply.' Engaging seriously "
+                        "with novelty's output, even to reject it, is what breaks the "
+                        "plateau. Do not ignore it silently. "
                     )
             explanation += "Your new answer MUST make material changes — do NOT simply copy or " "resubmit the same content."
             if improvements_text:
@@ -589,7 +705,7 @@ def evaluate_checklist_submission(
         substantiveness_summary += f" Substantiveness issues: {'; '.join(substantiveness_eval['issues'])}."
     explanation += substantiveness_summary
 
-    return {
+    result = {
         "verdict": verdict,
         "explanation": explanation,
         "true_count": true_count,
@@ -601,6 +717,11 @@ def evaluate_checklist_submission(
         "substantiveness_gate_triggered": substantiveness_gate_triggered,
         "convergence_offramp_triggered": convergence_offramp_triggered,
     }
+    if best_agent is not None:
+        result["best_agent"] = best_agent
+    if per_agent_scores is not None:
+        result["per_agent_scores"] = per_agent_scores
+    return result
 
 
 def _register_checklist_tool(mcp: fastmcp.FastMCP, specs_path: Path) -> None:
@@ -649,10 +770,15 @@ def _register_checklist_tool(mcp: fastmcp.FastMCP, specs_path: Path) -> None:
         return json.dumps(result)
 
     submit_checklist.__doc__ = (
-        "Submit your checklist evaluation. Each score in 'scores' must be an "
-        "object with 'score' (0-10) and 'reasoning' (why you gave that score). "
-        "The 'improvements' field should describe features or content that an "
-        "ideal answer would have but no existing answer has attempted. "
+        "Submit your checklist evaluation. "
+        "Score each agent's answer separately per criterion, then submit all "
+        "agent scores in 'scores' as a nested object: "
+        '{"agent1": {"E1": {"score": 8, "reasoning": "..."}, ...}, "agent2": {...}}. '
+        "The verdict is determined by the strongest agent's scores — the agent "
+        "with the highest aggregate across all criteria. Include all agents so "
+        "the evaluation is transparent and auditable. "
+        "The 'improvements' field should describe dimensions where even the "
+        "best agent fell short — genuine gaps requiring a new answer. "
         "Use the 'substantiveness' object to report planned change counts "
         "(transformative/structural/incremental) and whether decision space is exhausted. "
         "Use 'report_path' to provide a markdown gap report when report gating "

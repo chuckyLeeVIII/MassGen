@@ -86,7 +86,7 @@ def build_roi_decision_block(
     *,
     iterate_action: str = "new_answer",
     satisfied_action: str = "vote",
-    satisfied_detail: str = "for the best existing answer",
+    satisfied_detail: str = "for the answer with the strongest overall scores",
 ) -> str:
     """Build the complete ROI rubric + decision rule block.
 
@@ -96,15 +96,20 @@ def build_roi_decision_block(
     quality_bar = _threshold_to_quality_bar(threshold)
     quality_bar, budget_line = _build_budget_line(quality_bar, answers_used, answer_cap)
 
-    return f"""**Step 1: Rate the best existing answer on ALL dimensions (1-10 each):**
+    return f"""**Step 1: Rate EACH answer on ALL dimensions (1-10 each):**
 {_ROI_RUBRIC}
 
+Score every answer separately. Note which answer handles each dimension best —
+this tells you what already exists and is worth keeping vs. what needs to be built.
+
 **Step 2: Check against the quality bar.**
-Your quality bar is **{quality_bar}/10**. If ANY dimension scores below this bar, you SHOULD iterate.
+Your quality bar is **{quality_bar}/10**. For each dimension, look at the
+**best score across all answers**. If any dimension's best score is still below
+the bar, no existing answer has solved that gap yet — you SHOULD iterate.
 
 **Decision Rule:**
-- Any dimension < {quality_bar} -> `{iterate_action}` (improve the weakest dimensions)
-- All dimensions >= {quality_bar} -> `{satisfied_action}` {satisfied_detail}
+- Any dimension's best score < {quality_bar} -> `{iterate_action}` (a real gap exists that no answer fills)
+- All dimensions have at least one answer >= {quality_bar} -> `{satisfied_action}` {satisfied_detail}
 
 A good first draft is rarely perfect. Look for what can be *better*, not just what is *wrong*.{budget_line}"""
 
@@ -220,7 +225,50 @@ def _checklist_confidence_cutoff(effective_threshold: int) -> int:
     return max(4, int(10 - effective_threshold * 0.5))
 
 
-def _build_checklist_analysis() -> str:
+def _build_criteria_failure_bullets(custom_checklist_items: list[str] | None = None) -> str:
+    """Build failure-pattern bullets from criteria list.
+
+    When custom items are provided, generates E1/E2/... bullets with short
+    labels derived from the first ~60 chars of each criterion text.
+    Otherwise returns the hardcoded generic labels.
+    """
+    if custom_checklist_items:
+        lines = []
+        for i, text in enumerate(custom_checklist_items):
+            label = text[:60].rstrip(" .,—-")
+            lines.append(f"- **E{i + 1} ({label})**: Gaps or failures against this criterion?")
+        return "\n".join(lines)
+    return (
+        "- **E1 (goal alignment)**: Requirements missing or only partially met?\n"
+        "- **E2 (correctness)**: Broken behavior, wrong results, regressions?\n"
+        "- **E3+ (remaining criteria)**: Quality gaps against each remaining criterion?"
+    )
+
+
+def _build_changedoc_failure_bullets(custom_checklist_items: list[str] | None = None) -> str:
+    """Build changedoc-specific failure-pattern bullets.
+
+    When custom items are provided, uses dynamic labels. Otherwise uses the
+    default changedoc labels (goal alignment, correctness, changedoc quality,
+    alignment, remaining criteria).
+    """
+    if custom_checklist_items:
+        return _build_criteria_failure_bullets(custom_checklist_items)
+    return (
+        "- **E1 (goal alignment)**: Output failures — what doesn't work? What produces wrong\n"
+        "  results? What would a demanding user be disappointed by?\n"
+        "- **E2 (correctness)**: Regression failures — does the deliverable actually work\n"
+        "  end-to-end? Are features from earlier rounds still functioning? A working output\n"
+        "  with fewer features beats a broken output with more.\n"
+        "- **E3 (changedoc quality)**: Which decisions have thin rationale? Which alternatives\n"
+        "  are strawmen? Which Implementation fields are vague, incorrect, or fabricated?\n"
+        "- **E3 (alignment)**: Where did the code drift from documented decisions? What was\n"
+        "  built but never decided? What was decided but poorly implemented?\n"
+        "- **E4+ (remaining criteria)**: Quality gaps against each remaining criterion?"
+    )
+
+
+def _build_checklist_analysis(custom_checklist_items: list[str] | None = None) -> str:
     """Build GEPA-style diagnostic analysis section for checklist modes.
 
     Uses structured diagnostic feedback (failure patterns, success patterns,
@@ -230,7 +278,8 @@ def _build_checklist_analysis() -> str:
 
     The analysis handles both N=1 and N>1 in a single template.
     """
-    return """## Diagnostic Analysis
+    failure_bullets = _build_criteria_failure_bullets(custom_checklist_items)
+    return f"""## Diagnostic Analysis
 
 Complete your full analysis before reading the Decision section below. Do not let
 the decision criteria influence your assessment.
@@ -245,9 +294,7 @@ What specific errors, gaps, or broken functionality exist in each answer?
 Be concrete — "login form has no error states" not "could be better."
 
 For each answer, map failures to the evaluation criteria they violate:
-- **E1 (goal alignment)**: Requirements missing or only partially met?
-- **E2 (correctness)**: Broken behavior, wrong results, regressions?
-- **E3+ (remaining criteria)**: Quality gaps against each remaining criterion?
+{failure_bullets}
 
 Example format:
 - E1: Missing mobile navigation = core requirement unmet
@@ -340,14 +387,14 @@ A score that contradicts your own Failure Patterns section is dishonest — fix
 either the analysis or the score.\""""
 
 
-def _build_changedoc_checklist_analysis() -> str:
+def _build_changedoc_checklist_analysis(custom_checklist_items: list[str] | None = None) -> str:
     """Build changedoc-anchored GEPA-style diagnostic analysis for checklist modes.
 
     Replaces the generic _build_checklist_analysis() when changedoc is enabled.
     Combines GEPA diagnostic structure with changedoc-specific sections
     (Decision Audit, Implementation Accuracy).
     """
-    return """## Changedoc-Anchored Diagnostic Analysis
+    return f"""## Changedoc-Anchored Diagnostic Analysis
 
 Complete your full analysis before reading the Decision section below. Do not let
 the decision criteria influence your assessment.
@@ -382,16 +429,7 @@ changedoc, and the alignment between them? Map each failure to the E-criterion
 it violates.
 
 For each answer:
-- **E1 (goal alignment)**: Output failures — what doesn't work? What produces wrong
-  results? What would a demanding user be disappointed by?
-- **E2 (correctness)**: Regression failures — does the deliverable actually work
-  end-to-end? Are features from earlier rounds still functioning? A working output
-  with fewer features beats a broken output with more.
-- **E3 (changedoc quality)**: Which decisions have thin rationale? Which alternatives
-  are strawmen? Which Implementation fields are vague, incorrect, or fabricated?
-- **E3 (alignment)**: Where did the code drift from documented decisions? What was
-  built but never decided? What was decided but poorly implemented?
-- **E4+ (remaining criteria)**: Quality gaps against each remaining criterion?
+{_build_changedoc_failure_bullets(custom_checklist_items)}
 
 If you cannot find meaningful failures, your review is probably too generous.
 
@@ -524,12 +562,15 @@ def _build_checklist_decision(
 
 Now decide: call `{iterate_action}` or `{terminate_action}`.
 
-- `{iterate_action}`: produce an improved answer (synthesizing across answers if multiple exist).
-- `{terminate_action}`: select the best existing answer and stop.
+- `{iterate_action}`: build a new answer from scratch, incorporating only the specific
+  elements from existing answers that your scoring identified as genuinely excellent.
+  Default to fresh thinking — do not anchor to any one answer's structure.
+- `{terminate_action}`: select the answer with the strongest overall scores and stop.
 
-The default is `{iterate_action}`. To justify `{terminate_action}`, you must demonstrate that nothing
-of value would be lost — that the best answer already captures everything worth
-keeping. If you cannot confidently make that case, choose `{iterate_action}`.
+The default is `{iterate_action}`. To justify `{terminate_action}`, you must demonstrate that
+every dimension is already well-covered by at least one existing answer, and the gaps
+between answers are minor enough that synthesis would add little. If you cannot
+confidently make that case, choose `{iterate_action}`.
 
 ### Threshold
 
@@ -537,10 +578,9 @@ Your threshold is **{threshold}** on a 0-10 scale. This controls how strong your
 case for `{terminate_action}` must be:
 - 0: only `{terminate_action}` if answers are virtually identical — any unique content
   justifies `{iterate_action}`.
-- 5: `{terminate_action}` if the best answer is solid and any remaining gaps or unique content
-  in other answers is minor.
-- 10: `{terminate_action}` as long as the best answer is adequate, even if improvements are
-  possible.
+- 5: `{terminate_action}` if all dimensions are well-covered across answers and gaps are minor.
+- 10: `{terminate_action}` as long as answers are adequate across dimensions, even if
+  some improvements remain possible.
 
 ### Budget
 
@@ -592,12 +632,15 @@ def _build_checklist_scored_decision(
 
 Now decide: call `{iterate_action}` or `{terminate_action}`.
 
-- `{iterate_action}`: produce an improved answer (synthesizing across answers if multiple exist).
-- `{terminate_action}`: select the best existing answer and stop.
+- `{iterate_action}`: build a new answer from scratch, incorporating only the specific
+  elements from existing answers that your scoring identified as genuinely excellent.
+  Default to fresh thinking — do not anchor to any one answer's structure.
+- `{terminate_action}`: select the answer with the strongest overall scores and stop.
 
-The default is `{iterate_action}`. To justify `{terminate_action}`, you must demonstrate that nothing
-of value would be lost — that the best answer already captures everything worth
-keeping. If you cannot confidently make that case, choose `{iterate_action}`.
+The default is `{iterate_action}`. To justify `{terminate_action}`, you must demonstrate that
+every dimension is already well-covered by at least one existing answer, and the gaps
+between answers are minor enough that synthesis would add little. If you cannot
+confidently make that case, choose `{iterate_action}`.
 
 ### Threshold
 
@@ -605,10 +648,9 @@ Your threshold is **{threshold}** on a 0-10 scale. This controls how strong your
 case for `{terminate_action}` must be:
 - 0: only `{terminate_action}` if answers are virtually identical — any unique content
   justifies `{iterate_action}`.
-- 5: `{terminate_action}` if the best answer is solid and any remaining gaps or unique content
-  in other answers is minor.
-- 10: `{terminate_action}` as long as the best answer is adequate, even if improvements are
-  possible.
+- 5: `{terminate_action}` if all dimensions are well-covered across answers and gaps are minor.
+- 10: `{terminate_action}` as long as answers are adequate across dimensions, even if
+  some improvements remain possible.
 
 ### Budget
 
@@ -704,8 +746,10 @@ def _build_checklist_gated_decision(
 
 Now decide: call `{iterate_action}` or `{terminate_action}`.
 
-- `{iterate_action}`: produce an improved answer (synthesizing across answers if multiple exist).
-- `{terminate_action}`: select the best existing answer and stop.
+- `{iterate_action}`: build a new answer from scratch, incorporating only the specific
+  elements from existing answers that your scoring identified as genuinely excellent.
+  Default to fresh thinking — do not anchor to any one answer's structure.
+- `{terminate_action}`: select the answer with the strongest overall scores and stop.
 
 ### Substantiveness Test
 
@@ -767,9 +811,22 @@ The **substantiveness** object is required so the system can:
 - Verify your commitments by name — list each specific change, not just a count
 
 Use:
-- `"transformative"`: list of fundamentally different approach/architecture changes planned
-- `"structural"`: list of major capability/experience redesign changes planned
-- `"incremental"`: list of polish-level changes planned
+- `"transformative"`: changes that alter the overall structure, approach, or framing —
+  a user would notice the output is fundamentally reorganized or reconceived. E.g.:
+  switch to a completely different algorithm or architecture; introduce a new central
+  argument or creative direction; redesign the entire output structure (linear → modular,
+  chapters → themes, class-based → functional).
+- `"structural"`: significant improvements to existing components without changing the
+  overall approach — a major part gets materially better. E.g.: rewrite one module or
+  section; fix a broken subsystem; substantially improve one quality dimension within the
+  current structure.
+- `"incremental"`: polish and refinement within existing elements — noticeable only on
+  close inspection. E.g.: clearer variable names; better wording in a paragraph; minor
+  formatting or style adjustments.
+
+Quick test: "Would a user notice the overall approach or structure changed?" → transformative.
+"Would they notice a major part got substantially better?" → structural.
+"Would they only notice if they looked closely?" → incremental.
 - `"decision_space_exhausted"`: `true` only if no meaningful structural/transformative improvements remain
 - `"notes"`: short justification
 
@@ -806,27 +863,123 @@ tells you to iterate, you are expected to implement what you identified.
 The tool will evaluate your scores and return a verdict telling you whether
 to call `{terminate_action}` or `{iterate_action}`. Follow the verdict.
 
-**If the verdict is `{iterate_action}`**: your new answer MUST be **obviously and
-substantially better** — not just marginally different. A user should immediately
-notice the improvement. Do NOT simply copy or resubmit the same content with minor
-tweaks. Use your improvements analysis to guide what to build differently, and
-implement the changes you identified — not just acknowledge them.
+**Round lifecycle — full sequence:**
 
-**Implement ALL identified improvements, not just one.** If your gap analysis found
-multiple structural weaknesses, address them all in this round. Do not pick the
-single easiest improvement, implement it, and stop. Each round is expensive — make
-it count by delivering the full scope of improvements you identified.
+**Phase 1 — Gather evidence. Do this BEFORE calling `submit_checklist`.**
 
-**Log committed items in your task plan.** Before starting work, add each
-structural and transformative improvement you identified to your task plan as a
-separate task. Check off each task only after it is fully implemented and
-verifiable in the output. Do not substitute easier work — deliver exactly what
-you committed to.
+Spawn evaluator subagent(s) in background to gather programmatic evidence while
+you do qualitative analysis in parallel:
 
-**Verify existing features before adding new ones.** After making changes, confirm that
-features from prior rounds still work. Adding a feature that breaks existing functionality
-is regression, not improvement. A working output with fewer features is always better than
-a broken output with more features."""
+- Evaluators handle: screenshots + visual observations, test runs, completeness
+  checks, feature verification. Assign one evaluator per independent concern
+  (e.g. frontend layout vs backend correctness) if parallelizable. Evaluators
+  observe and report — they do NOT make changes.
+- **File access**: Your workspace is automatically mounted read-only for subagents
+  (include_parent_workspace=True by default). Reference files by their full
+  workspace-absolute paths. Do NOT reference the Shared Reference (temp_workspaces)
+  path for files you created this round — those are only archived there after you
+  submit, not during execution. For fully isolated research subagents that don't
+  need your files, pass `include_parent_workspace: false`.
+- You handle: read all agents' answers, identify qualitative gaps, assess
+  creative/craft quality. You make the value judgments — evaluator gives you
+  evidence to reason from, not scores.
+- Collect evaluator results when ready. Interpret their observations through
+  your own quality lens to assign per-agent scores per dimension.
+
+If no specialized subagents are available: do all evidence gathering and
+qualitative analysis inline.
+
+**Phase 2 — Score and submit `submit_checklist`.**
+
+Score EACH agent per dimension using the evidence from Phase 1. Submit with
+per-agent scores format. Classify improvements honestly using the definitions
+above — do not downgrade transformative work to avoid triggering a new round.
+The `improvements` field = dimensions where even the best agent fell short.
+
+`submit_checklist` returns a verdict:
+- **`{iterate_action}`** — improvements needed; continue to Phase 3
+- **`{terminate_action}`** — output is sufficient; skip to Phase 5 to submit
+
+Follow the verdict. Do not call `submit_checklist` again after receiving it.
+
+**Phase 3 — Execute improvements (`{iterate_action}` verdict only).**
+
+**Step 3a — Write your task plan first, one task per change.**
+
+Before executing anything, enumerate every improvement as individual task plan
+items. Each transformative change, each structural fix, each incremental polish
+item gets its own task entry — do not batch them. Fine-grained tasks make
+parallelism possible: if "rewrite hero" and "fix mobile nav" are one item,
+you can't parallelize them.
+
+Annotate each task:
+- `[builder]` — focused single-deliverable spec; can run in parallel
+- `[main]` — judgment-heavy work you do inline (architectural decisions, synthesis)
+- `[synthesize]` — pull a specific element from another agent's answer and keep it
+- `[skip]` — deprioritized for this round
+
+Add `depends_on` links only where the output of one task is genuinely required
+input for another. Most improvements are independent — don't add false dependencies.
+
+**Step 3b — Maximize parallelism when executing.**
+
+Look at your task plan. Identify all `[builder]` tasks with no dependencies on
+each other. Spawn them all in a **single** `spawn_subagents` call — they run
+simultaneously:
+
+- `tasks`: one entry per deliverable (not one entry for all of them)
+- `background=True, refine=False`
+- Parent workspace is auto-mounted read-only. Use `context_paths` only for
+  additional paths (e.g. peer workspace paths from Available agent workspaces).
+
+Do your `[main]` work while builders run. Collect and integrate when all finish.
+Then spawn the next wave for tasks that depended on this batch.
+
+When collecting builder results:
+- **Output doesn't match spec**: Check whether the spec was ambiguous. If the
+  builder's interpretation was reasonable, accept it and note the deviation. If
+  the spec was clear and the builder diverged, re-spawn that one task with an
+  explicit correction — do not re-run all builders.
+- **Builder surfaces a hidden dependency**: It will say so in its output. Spawn
+  the blocking task first, then re-run the dependent builder once it completes.
+- **Multiple builders rewrote the same file**: You arbitrate — pick the better
+  version or merge manually inline. Do not silently discard either output.
+
+If no specialized subagents are available, execute tasks inline in dependency
+order.
+
+**Phase 4 — Novelty break-glass (branch: `{iterate_action}` verdict AND zero transformative changes identified).**
+
+Skip this phase if you have transformative changes to implement — go straight to Phase 3.
+Only enter Phase 4 if `submit_checklist` returned zero transformative changes AND
+a novelty subagent is available. If so: spawn novelty (`background=True, refine=False`)
+while you continue implementing structural improvements. When novelty returns,
+evaluate each direction against your findings: does it genuinely break the
+anchoring pattern? Is it implementable? Does it differ from what's already been
+tried? If at least one direction passes, adopt it and list it in the
+`transformative` array of your next checklist submission. If none pass, explain
+in `substantiveness.notes` which direction failed and why — not just "none
+apply." Engaging seriously with novelty's output, even to reject it, is what
+breaks the plateau. Do not ignore it silently.
+
+**Phase 5 — Integrate, verify, submit.**
+
+After all tasks complete:
+1. Verify no regressions — confirm features from prior rounds still work. A working
+   output with fewer features is always better than a broken output with more.
+2. Confirm you implemented the full scope of identified improvements, not just some.
+   Each round is expensive — deliver everything you identified, not just the easiest item.
+3. Call `{iterate_action}` to submit your improved answer and end this round.
+
+Your answer MUST be **obviously and substantially better** than the prior round —
+not just marginally different. A user should immediately notice the improvement.
+Do not copy or resubmit the same content with minor tweaks.
+
+**What happens after `{iterate_action}`:** Your improved answer is submitted and this
+round ends. If another coordination round is needed, you will receive a new prompt and
+the lifecycle restarts at Phase 1 with all agents' updated answers. If the output is
+now sufficient, the session terminates. You do not need to do anything to trigger the
+next round — the system handles it."""
 
 
 class Priority(IntEnum):
@@ -1562,15 +1715,17 @@ class MemorySection(SystemPromptSection):
     Args:
         memory_config: Dictionary containing memory system configuration
                       including short-term and long-term memory content
+        read_only: If True, show memory context without write/reminder instructions.
     """
 
-    def __init__(self, memory_config: dict[str, Any]):
+    def __init__(self, memory_config: dict[str, Any], read_only: bool = False):
         super().__init__(
             title="Memory System",
             priority=Priority.HIGH,
             xml_tag="memory",
         )
         self.memory_config = memory_config
+        self.read_only = read_only
 
     def build_content(self) -> str:
         """Build memory system instructions."""
@@ -1701,9 +1856,18 @@ class MemorySection(SystemPromptSection):
                             pass
                     content_parts.append(f"- `{mem_name}.md`: {description}")
 
+        if self.read_only:
+            content_parts.append(
+                "\n### Memory Mode\n\n"
+                "Round-time memory capture is disabled for this run. Use the memory context above as read-only guidance "
+                "during coordination. Consolidation can happen at final presentation.\n",
+            )
+            return "\n".join(content_parts)
+
         # File operations - simple and direct
         content_parts.append(
             "\n### Saving Memories\n\n"
+            "Before writing memory files, review `tasks/changedoc.md`.\n\n"
             "Save memories by writing markdown files to the memory directory:\n"
             "- **Short-term** → `memory/short_term/{name}.md` (auto-loaded every turn)\n"
             "- **Long-term** → `memory/long_term/{name}.md` (load manually when needed)\n\n"
@@ -1862,7 +2026,12 @@ class WorkspaceStructureSection(SystemPromptSection):
                 content_parts.append("## Project Workspace\n")
                 content_parts.append(f"Your project code is at `{wt_path}`. **All code changes must be made here.**")
                 content_parts.append(f"Run `cd {wt_path}` before starting any code work.\n")
-                content_parts.append(f"Scratch space: `{wt_path}/.massgen_scratch/` (git-excluded, for experiments)\n")
+                content_parts.append(
+                    f"Scratch space: `{wt_path}/.massgen_scratch/` "
+                    f"(git-excluded, for experiments)\n"
+                    f"  - Verification: `.massgen_scratch/verification/` — save test output, "
+                    f"screenshots, videos here to confirm your work is correct before submitting\n",
+                )
                 content_parts.append(
                     f"**Important**: Internal files (`tasks/changedoc.md`, `tasks/evolving_skill/`, "
                     f"implementation checklists) belong in your main workspace directory, NOT in the "
@@ -2422,6 +2591,9 @@ class FilesystemBestPracticesSection(SystemPromptSection):
             "final deliverable. For example, move `test_output.txt` or `old_version.py` to scratch. "
             "**Never delete system-managed directories**: `.worktree/`, `.git/`, symlinks to shared "
             "tools, or any directory you did not create.\n"
+            "- **Verification Artifacts**: Save test results, screenshots, videos, and other "
+            "verification evidence to `.massgen_scratch/verification/`. These are preserved "
+            "in scratch archives for reference in subsequent rounds.\n"
             "- **Organization**: Keep files logically organized. If you're combining work from "
             "multiple agents, structure the result clearly.\n"
             "- **Internal Documents**: Never write internal documents (decision journals, evolving "
@@ -2451,6 +2623,12 @@ class FilesystemBestPracticesSection(SystemPromptSection):
             "their workspaces (via Shared Reference)\n"
             "- **For functionality**: Evaluate outcomes by running tests, checking visualizations, "
             "validating outputs, or testing the deliverables\n"
+            "- **Run your own verification**: Do not rely solely on agents' self-reported results. "
+            "Run tests, take screenshots, and validate deliverables yourself. Save your "
+            "verification evidence to `.massgen_scratch/verification/{agentN}/` (create subdirs "
+            "as needed per agent you're evaluating). Agents' own verification may be available "
+            "in their Shared Reference under `.scratch_archive/{agentN}/verification/` as "
+            "optional context, but it may be incomplete or stale — always verify independently.\n"
             "- **Focus verification**: Prioritize critical functionality and substantial differences "
             "rather than exhaustively reviewing every file\n"
             "- **Don't rely solely on answer text**: Ensure the actual work matches their claims\n",
@@ -2686,6 +2864,7 @@ class EvaluationSection(SystemPromptSection):
         has_changedoc: bool = False,
         custom_checklist_items: list[str] | None = None,
         item_categories: dict[str, str] | None = None,
+        has_existing_answers: bool = True,
     ):
         super().__init__(
             title="MassGen Coordination",
@@ -2704,6 +2883,7 @@ class EvaluationSection(SystemPromptSection):
         self.has_changedoc = has_changedoc
         self.custom_checklist_items = custom_checklist_items
         self.item_categories = item_categories
+        self.has_existing_answers = has_existing_answers
 
     def build_content(self) -> str:
         # Vote-only mode: agent has exhausted their answer limit
@@ -2800,7 +2980,7 @@ Your goal is to iteratively refine answers until they meet the quality bar.
             threshold = self.voting_threshold if self.voting_threshold is not None else 5
 
             items = self.custom_checklist_items if self.custom_checklist_items is not None else (_CHECKLIST_ITEMS_CHANGEDOC if self.has_changedoc else _CHECKLIST_ITEMS)
-            analysis = _build_changedoc_checklist_analysis() if self.has_changedoc else _build_checklist_analysis()
+            analysis = _build_changedoc_checklist_analysis(self.custom_checklist_items) if self.has_changedoc else _build_checklist_analysis(self.custom_checklist_items)
             if effective_sensitivity == "checklist":
                 decision = _build_checklist_decision(
                     threshold,
@@ -2819,14 +2999,25 @@ Your goal is to iteratively refine answers until they meet the quality bar.
 
 {decision}"""
         elif effective_sensitivity == "checklist_gated":
-            items = self.custom_checklist_items if self.custom_checklist_items is not None else (_CHECKLIST_ITEMS_CHANGEDOC if self.has_changedoc else _CHECKLIST_ITEMS)
-            analysis = _build_changedoc_checklist_analysis() if self.has_changedoc else _build_checklist_analysis()
-            decision = _build_checklist_gated_decision(
-                items,
-                require_gap_report=self.checklist_require_gap_report,
-                gap_report_mode=self.gap_report_mode,
-            )
-            evaluation_section = f"""{analysis}
+            if not self.has_existing_answers:
+                # Round 1 — no prior answers to evaluate against. Skip checklist instructions
+                # entirely; agent should build and submit directly.
+                evaluation_section = (
+                    "## Decision\n\n"
+                    "**Round 1 — First Answer:** Build your best initial version and submit it "
+                    "via the `new_answer` workflow tool. Verify your work before submitting. "
+                    "Checklist-based evaluation begins in round 2 when there are prior answers "
+                    "to compare against."
+                )
+            else:
+                items = self.custom_checklist_items if self.custom_checklist_items is not None else (_CHECKLIST_ITEMS_CHANGEDOC if self.has_changedoc else _CHECKLIST_ITEMS)
+                analysis = _build_changedoc_checklist_analysis(self.custom_checklist_items) if self.has_changedoc else _build_checklist_analysis(self.custom_checklist_items)
+                decision = _build_checklist_gated_decision(
+                    items,
+                    require_gap_report=self.checklist_require_gap_report,
+                    gap_report_mode=self.gap_report_mode,
+                )
+                evaluation_section = f"""{analysis}
 
 {decision}"""
         elif effective_sensitivity == "adversarial":
@@ -3001,7 +3192,7 @@ class DecompositionSection(SystemPromptSection):
 
             if self.voting_sensitivity in ("checklist", "checklist_scored"):
                 items = self.custom_checklist_items if self.custom_checklist_items is not None else (_CHECKLIST_ITEMS_CHANGEDOC if self.has_changedoc else _CHECKLIST_ITEMS)
-                analysis = _build_changedoc_checklist_analysis() if self.has_changedoc else _build_checklist_analysis()
+                analysis = _build_changedoc_checklist_analysis(self.custom_checklist_items) if self.has_changedoc else _build_checklist_analysis(self.custom_checklist_items)
                 if self.voting_sensitivity == "checklist":
                     decision = _build_checklist_decision(
                         self.voting_threshold,
@@ -3028,7 +3219,7 @@ Both are terminal actions that end your round.
 {decision}"""
             elif self.voting_sensitivity == "checklist_gated":
                 items = self.custom_checklist_items if self.custom_checklist_items is not None else (_CHECKLIST_ITEMS_CHANGEDOC if self.has_changedoc else _CHECKLIST_ITEMS)
-                analysis = _build_changedoc_checklist_analysis() if self.has_changedoc else _build_checklist_analysis()
+                analysis = _build_changedoc_checklist_analysis(self.custom_checklist_items) if self.has_changedoc else _build_checklist_analysis(self.custom_checklist_items)
                 decision = _build_checklist_gated_decision(
                     items,
                     terminate_action="stop",
@@ -3495,6 +3686,25 @@ A developer who was not present should be able to read the changedoc and:
 - Identify which ideas were genuinely new contributions (NEW markers)
 - Follow how decisions evolved through the deliberation trail"""
 
+_MEMORY_PRESENTER_INSTRUCTIONS = """
+### Memory Consolidation
+
+Your final output MUST include consolidated memory files in your main agent workspace directory:
+
+1. Write concise reusable memories to `memory/short_term/*.md` (auto-loaded every turn).
+2. Write detailed durable analyses to `memory/long_term/*.md` only when substantial.
+3. Preserve YAML frontmatter (`name`, `description`, `created`, `updated`) in each memory file.
+4. De-duplicate overlaps across agents and keep only the clearest final version of each memory.
+5. Use `tasks/changedoc.md` as your primary source for what to retain:
+   - decision rationale
+   - what worked/failed
+   - pitfalls to avoid next time
+   - user preferences discovered
+6. Use the same changedoc-backed learnings to align both memory files and any consolidated
+   evolving skill (`tasks/evolving_skill/SKILL.md`) so they do not conflict.
+
+Do not copy the changedoc verbatim. Synthesize short, reusable memory entries for future turns."""
+
 _SPEC_PRESENTER_INSTRUCTIONS = """\
 
 ### Spec Compliance Report
@@ -3630,11 +3840,10 @@ class SubagentSection(SystemPromptSection):
         if not self.specialized_subagents:
             return ""
 
-        background_by_type = {
-            "explorer": True,
-            "researcher": True,
-            "evaluator": False,
-        }
+        # All subagent types default to background=True — they do substantial work
+        # that should not block the main agent's context. Override only when a type
+        # genuinely must be blocking (e.g., a quick synchronous check).
+        background_by_type: dict[str, bool] = {}
 
         lines = [
             "",
@@ -3645,17 +3854,55 @@ class SubagentSection(SystemPromptSection):
         ]
 
         for t in self.specialized_subagents:
-            background_default = background_by_type.get(t.name.lower(), False)
+            background_default = background_by_type.get(t.name.lower(), True)
             background_str = "True" if background_default else "False"
             lines.append(f"**{t.name}** — {t.description}")
-            lines.append(f'`spawn_subagents(tasks=[{{"task": "...", "subagent_type": "{t.name}", "context_paths": []}}], background={background_str})`')
+            lines.append(
+                f'`spawn_subagents(tasks=[{{"task": "...", "subagent_type": "{t.name}"}}], background={background_str}, refine=False)`',
+            )
             if getattr(t, "expected_input", None):
                 lines.append("Expected input for this type:")
                 for item in t.expected_input:
                     lines.append(f"- {item}")
             if t.name.lower() == "evaluator":
                 lines.append(
-                    "Use this when the task is mostly programmatic execution/reporting (batch tests, Playwright flows, evidence capture sweeps, scripted validation).",
+                    "Use this when the task is mostly programmatic execution/reporting "
+                    "(batch tests, Playwright flows, evidence capture sweeps, scripted validation). "
+                    "Your workspace is mounted read-only by default. Use `include_parent_workspace: false` "
+                    "only for tasks with no workspace file dependencies.",
+                )
+            if t.name.lower() == "builder":
+                lines.append(
+                    "**FOR `BUILDER` TASKS — one task per deliverable, run independent ones in parallel:**\n\n"
+                    "**The key rule: one builder task per independent deliverable.** Do NOT write one "
+                    "large spec that covers multiple improvements. Split them into separate tasks and "
+                    "spawn them in a single `spawn_subagents` call — they run simultaneously.\n\n"
+                    "Bad (monolithic — DO NOT DO THIS):\n"
+                    '`tasks=[{"task": "Rewrite member portraits, redesign album section, fix timeline, '
+                    'update CSS, rewrite narrative, fix scroll-reveal", "subagent_type": "builder", ...}]`\n\n'
+                    "Good (parallel — each improvement is its own task):\n"
+                    "`tasks=[\n"
+                    '  {"task": "Rewrite member portraits section...", "subagent_type": "builder"},\n'
+                    '  {"task": "Redesign album section with artwork...", "subagent_type": "builder"},\n'
+                    '  {"task": "Fix alternating timeline layout...", "subagent_type": "builder"},\n'
+                    '  {"task": "Rewrite narrative prose in About + Hero...", "subagent_type": "builder"},\n'
+                    "]`\n\n"
+                    "**You decide what to build — builder executes it.** Make all creative and "
+                    "architectural decisions yourself before writing the spec. Builder does not "
+                    "decide what to change or which direction to take.\n\n"
+                    "**Parent workspace is auto-mounted read-only by default.** "
+                    "Use `context_paths` only for additional paths outside your workspace "
+                    "(e.g. peer workspace paths from Available agent workspaces).\n\n"
+                    "**The novelty → build loop** (when novelty fires after T=0):\n"
+                    "1. Novelty returns directions. Evaluate each: does it break the "
+                    "anchoring pattern? Is it implementable? Differs from what's been tried?\n"
+                    "2. If at least one passes, adopt it — list it in the `transformative` "
+                    "array of your next `submit_checklist`. If none pass, explain in "
+                    "`substantiveness.notes` which failed and why.\n"
+                    "3. Write a focused spec for ONE deliverable and spawn a builder task.\n"
+                    "4. Integrate and verify the result.\n\n"
+                    "**Deferring a valid proposal with T=0 wastes a full round** — "
+                    "it re-triggers novelty instead of making progress.",
                 )
             lines.append("")
 
@@ -3766,12 +4013,11 @@ quality and priorities, since you have the full context and the subagent may run
    - You can READ files from subagent workspaces
    - You CANNOT write directly to subagent workspaces
 2. **Fresh Context**: Subagents start with a clean slate (just the task you provide)
-3. **Explicit Context Paths (REQUIRED)**: Every task must include `context_paths`
-   - Use `[]` for clean-slate research (no extra context beyond task text)
-   - Use `["./"]` for read-only access to the current parent workspace (CWD)
-   - Use `["./", "./temp_workspaces/<peer_subagent_id>"]` to also include peer Shared Reference
-     artifacts (e.g., `agent_A`); note: relative paths resolve from the parent workspace, not your CWD — prefer absolute paths when available
-   - Use specific paths for least-privilege access (recommended when possible)
+3. **Workspace Access**: Your workspace is auto-mounted read-only by default
+   - `include_parent_workspace` (default `true`): subagent can read your files
+   - Set `include_parent_workspace: false` for fully isolated research subagents
+   - `context_paths` (optional): additional read-only paths — use for peer workspace
+     paths listed under Available agent workspaces
    - `context_files` remains optional for copying files into subagent workspace
 4. **No Nesting**: Subagents cannot spawn their own subagents
 5. **No Human Broadcast**: Subagents cannot ask the human or request human input,
@@ -3782,9 +4028,10 @@ quality and priorities, since you have the full context and the subagent may run
 **DO NOT submit your answer until ALL subagents have returned results.**
 
 When you spawn subagents:
-1. **Wait for the tool to return** - `spawn_subagents` blocks until ALL tasks complete
-2. **Do NOT say "I will now run subagents"** and submit an answer - wait for actual results first
-3. **Only after receiving results** should you integrate outputs and submit your answer
+1. **Use `background=True` (default)** — the tool returns immediately with subagent IDs.
+   Continue your own work while subagents run. Results are auto-injected or retrievable via `list_subagents()`.
+2. **Do NOT say "I will now run subagents"** and submit an answer before collecting results.
+3. **Only after receiving results** should you integrate outputs and submit your answer.
 
 **BAD**: "I spawned 5 subagents. I will now wait for them and report back." (submitting answer before results)
 **GOOD**: Wait for spawn tool to return → read results → integrate → then submit answer with completed work
@@ -3843,42 +4090,43 @@ All subagents start at the same time and cannot see each other's output. Design 
 **REQUIREMENTS:**
 1. **Maximum {self.max_concurrent} tasks per call** - requests for more will error
 2. **`CONTEXT.md` in workspace is REQUIRED** - subagents need to know the project/goal
-3. **Each task dict must have both `"task"` and `"context_paths"` fields**
-4. **`context_paths` must be explicit**:
-   - Use `[]` if you intentionally want no extra context
-   - Use `["./"]` for the current parent workspace (CWD)
-   - Use `["./", "./temp_workspaces/<peer_subagent_id>"]` to also include peer Shared Reference
-     artifacts (e.g., `agent_A`); note: relative paths resolve from the parent workspace, not your CWD — prefer absolute paths when available
-   - Use specific paths for least-privilege access
+3. **Each task dict must have `"task"` field** (other fields are optional)
+4. **Workspace access**:
+   - Your workspace is auto-mounted read-only (include_parent_workspace=true by default)
+   - Set `include_parent_workspace: false` for fully isolated research
+   - Use `context_paths` only for additional paths (e.g. peer workspaces)
 
 ```python
 # CORRECT: Independent parallel tasks (each can complete without the others)
+# Parent workspace is auto-mounted read-only — no context_paths needed
 spawn_subagents(
     tasks=[
-        {{"task": "Research and write Bob Dylan biography to bio.md", "subagent_id": "bio", "context_paths": []}},
-        {{"task": "Create discography table in discography.md", "subagent_id": "discog", "context_paths": []}},
-        {{"task": "List 20 famous songs with years in songs.md", "subagent_id": "songs", "context_paths": []}}
+        {{"task": "Research and write Bob Dylan biography to bio.md", "subagent_id": "bio"}},
+        {{"task": "Create discography table in discography.md", "subagent_id": "discog"}},
+        {{"task": "List 20 famous songs with years in songs.md", "subagent_id": "songs"}}
     ],
-    background=False,  # True to continue while subagent runs; False to wait for completion
-    refine=False,  # True to allow subagents to refine their answers (more expensive and slower but better quality)
+    background=True,  # default: run async, continue working; set False only when you must block
+    refine=False,  # default: single-pass, fast/cheap; set True only when quality justifies cost
 )
 
 # WRONG - DO NOT DO THIS (task 2 depends on task 1's output):
 # spawn_subagents(tasks=[
-#     {{"task": "Research all content", "context_paths": []}},
-#     {{"task": "Build website using the researched content", "context_paths": []}}  # CAN'T ACCESS TASK 1!
+#     {{"task": "Research all content"}},
+#     {{"task": "Build website using the researched content"}}  # CAN'T ACCESS TASK 1!
 # ])
 ```
 
 **background parameter (async mode):**
-- `background=True`: Spawn in background and continue working asynchronously. Results are
-  often auto-injected on a later tool call.
-- Use `list_subagents()` to check status and discover workspace paths for running subagents.
-- `background=False` (default): Wait for results before proceeding. Use when you need outputs to continue.
+- `background=True` **(default)**: Spawn in background and continue working asynchronously.
+  Results are often auto-injected on a later tool call. Use `list_subagents()` to check
+  status and discover workspace paths.
+- `background=False`: Wait for results before proceeding. Only use when you genuinely
+  cannot continue any meaningful work until the subagent completes.
 
 **refine parameter:**
-- `refine=True` (default): Multi-round refinement with voting. Higher quality, slower, more expensive. Use for complex analysis.
-- `refine=False`: Single-pass execution. Faster, cheaper. Use for simple lookups/lists.
+- `refine=False` **(default)**: Single-pass execution. Faster and cheaper. Use for most tasks.
+- `refine=True`: Multi-round refinement with voting. Higher quality but significantly slower
+  and more expensive. Only use when quality is critical and cost is acceptable.
 
 ## Background Subagent Lifecycle
 
@@ -3897,7 +4145,7 @@ Use `list_subagents()` to get the workspace path, then:
 ## Available Tools
 
 - `spawn_subagents(tasks, background?, refine?)` -- Max {self.max_concurrent} parallel tasks.
-  Each task must include `task` and explicit `context_paths` (can be `[]`).
+  Each task must include `task`. Parent workspace auto-mounted read-only.
 - `list_subagents()` - Discovery/index of spawned subagents (status, workspace, session_id)
 - `continue_subagent(subagent_id, message, timeout_seconds?)` - Continue an existing subagent conversation
 - `send_message_to_subagent(subagent_id, message)` - Send a message to a RUNNING background subagent.
@@ -4294,9 +4542,10 @@ After execution, the actual scripts live in `scripts/` and can be reused.
 
 1. **BEFORE starting work**: Create `tasks/evolving_skill/SKILL.md` in your main agent workspace directory \
 (NOT in the project code directory or worktree). Evolving skills are internal artifacts and must not be written to the project repository.
-2. **During execution**: Follow your plan, create scripts as documented
-3. **BEFORE answering**: Verify outputs work (run code, view visuals, check files)
-4. **AFTER completing work**: Update SKILL.md with Learnings section
+2. **Use `tasks/changedoc.md` as the canonical decision log for your evolving skill.**
+3. **During execution**: Follow your plan, create scripts as documented
+4. **BEFORE answering**: Verify outputs work (run code, view visuals, check files)
+5. **AFTER completing work**: Update SKILL.md with Learnings section
 
 ### Key Principles
 
@@ -4512,7 +4761,7 @@ you MUST create a `CONTEXT.md` file in your workspace with task context.
 This ordering is strict even for background jobs: write `CONTEXT.md` first, then start media tools.
 
 ### Why This Matters
-External APIs (like GPT-4.1 for image analysis) have no idea what you're working on.
+External APIs (like in `read_media`) have no idea what you're working on.
 Without context, they will hallucinate - for example, interpreting "MassGen" as
 "Massachusetts General Hospital" instead of "multi-agent AI system".
 

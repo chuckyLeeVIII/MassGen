@@ -83,6 +83,10 @@ class CoordinationConfig:
                                        by writing Markdown files to memory/ directories. Short-term
                                        memories auto-inject into all agents' system prompts. Long-term
                                        memories are read on-demand. Inspired by Letta's context hierarchy.
+        learning_capture_mode: Controls when evolving-skill + memory capture is produced.
+                              - "round": Existing behavior. Capture can be produced in coordination rounds.
+                              - "final_only" (default): Keep changedoc behavior, but defer evolving-skill + memory production
+                                to the final presenter stage. Coordination rounds remain read-focused.
         compression_target_ratio: Target ratio for reactive compression when context limit is exceeded.
                                  Value between 0 and 1, where 0.2 means preserve 20% of messages and
                                  summarize the remaining 80%. Lower values = more aggressive compression.
@@ -162,6 +166,7 @@ class CoordinationConfig:
     max_broadcasts_per_agent: int = 10
     task_planning_filesystem_mode: bool = False
     enable_memory_filesystem_mode: bool = False
+    learning_capture_mode: str = "final_only"  # "round" | "final_only"
     compression_target_ratio: float = 0.20  # Preserve 20% of messages on context overflow
     use_skills: bool = False
     massgen_skills: list[str] = field(default_factory=list)
@@ -191,6 +196,8 @@ class CoordinationConfig:
     subagent_types: list[str] | None = None  # None = use DEFAULT_SUBAGENT_TYPES (excludes novelty)
     novelty_injection: str = "none"  # "none" | "gentle" | "moderate" | "aggressive"
     checklist_criteria_preset: str | None = None  # "persona" | "decomposition" | "evaluation" | "prompt" | "analysis"
+    checklist_criteria_inline: list[dict[str, str]] | None = None  # [{text: str, category: must|should|could}]
+    resume_from_log: dict[str, Any] | None = None  # {log_path: str, round: int}
 
     def __post_init__(self):
         """Validate configuration after initialization."""
@@ -199,6 +206,7 @@ class CoordinationConfig:
         self._validate_subagent_runtime_config()
         self._validate_drift_conflict_policy()
         self._validate_novelty_injection()
+        self._validate_learning_capture_mode()
 
     def _validate_timeout_config(self):
         """Validate subagent timeout configuration."""
@@ -263,9 +271,17 @@ class CoordinationConfig:
                 f"Invalid novelty_injection: '{self.novelty_injection}'. " f"Must be one of: {sorted(valid_values)}",
             )
 
+    def _validate_learning_capture_mode(self):
+        """Validate learning_capture_mode setting."""
+        valid_values = {"round", "final_only"}
+        if self.learning_capture_mode not in valid_values:
+            raise ValueError(
+                f"Invalid learning_capture_mode: '{self.learning_capture_mode}'. " f"Must be one of: {sorted(valid_values)}",
+            )
+
     def _validate_subagent_runtime_config(self):
         """Validate subagent runtime mode/fallback configuration."""
-        valid_modes = {"isolated", "inherited"}
+        valid_modes = {"isolated", "inherited", "delegated"}
         if self.subagent_runtime_mode not in valid_modes:
             raise ValueError(
                 f"Invalid subagent_runtime_mode: '{self.subagent_runtime_mode}'. " f"Must be one of: {sorted(valid_modes)}",
@@ -312,6 +328,12 @@ class AgentConfig:
         fairness_enabled: Enable fairness controls across all coordination modes (default: True)
         fairness_lead_cap_answers: Maximum allowed lead in answer revisions over slowest active peer
         max_midstream_injections_per_round: Maximum unseen source updates injected per agent per round
+        max_checklist_calls_per_round: Maximum submit_checklist calls per answer before blocking
+            (default 1). After a new_answer verdict, the agent must implement and submit
+            new_answer rather than calling submit_checklist again.
+        checklist_first_answer: Allow submit_checklist before the first answer is submitted
+            (default False). When False, checklist evaluation begins from round 2 — agents
+            build and submit their first answer directly without checklist gating.
     """
 
     # Core backend configuration (includes tool enablement)
@@ -331,6 +353,8 @@ class AgentConfig:
     fairness_enabled: bool = True
     fairness_lead_cap_answers: int = 2
     max_midstream_injections_per_round: int = 2
+    max_checklist_calls_per_round: int = 1
+    checklist_first_answer: bool = False
 
     # Agent customization
     agent_id: str | None = None
@@ -678,7 +702,7 @@ class AgentConfig:
         system_prompt: str | None = None,
         allowed_tools: list | None = None,  # Legacy support
         disallowed_tools: list | None = None,  # Preferred approach
-        max_thinking_tokens: int = 8000,
+        reasoning: dict | None = None,
         cwd: str | None = None,
         **kwargs,
     ) -> "AgentConfig":
@@ -694,7 +718,10 @@ class AgentConfig:
             allowed_tools: [LEGACY] List of allowed tools (use disallowed_tools instead)
             disallowed_tools: List of dangerous operations to block
                             (default: ["Bash(rm*)", "Bash(sudo*)", "Bash(su*)", "Bash(chmod*)", "Bash(chown*)"])
-            max_thinking_tokens: Maximum tokens for internal thinking (default: 8000)
+            reasoning: Reasoning configuration dict. Preferred keys:
+                - type: "adaptive" (default), "enabled", or "disabled"
+                - effort: "low", "medium", "high" (default), or "max"
+                - budget_tokens: int (only for type="enabled")
             cwd: Current working directory for file operations
             **kwargs: Additional backend parameters
 
@@ -702,6 +729,12 @@ class AgentConfig:
             Maximum power configuration (recommended)::
 
                 config = AgentConfig.create_claude_code_config()
+
+            Custom reasoning config::
+
+                config = AgentConfig.create_claude_code_config(
+                    reasoning={"type": "adaptive", "effort": "max"}
+                )
 
             Custom security restrictions::
 
@@ -715,12 +748,6 @@ class AgentConfig:
                     cwd="/path/to/project",
                     system_prompt="You are an expert developer assistant."
                 )
-
-            Legacy allowed_tools approach (not recommended)::
-
-                config = AgentConfig.create_claude_code_config(
-                    allowed_tools=["Read", "Write", "Edit", "Bash"]
-                )
         """
         backend_params = {"model": model, **kwargs}
 
@@ -732,8 +759,8 @@ class AgentConfig:
             backend_params["allowed_tools"] = allowed_tools
         if disallowed_tools:
             backend_params["disallowed_tools"] = disallowed_tools
-        if max_thinking_tokens != 8000:  # Only set if different from default
-            backend_params["max_thinking_tokens"] = max_thinking_tokens
+        if reasoning:
+            backend_params["reasoning"] = reasoning
         if cwd:
             backend_params["cwd"] = cwd
 
@@ -1034,6 +1061,8 @@ class AgentConfig:
             "fairness_enabled": self.fairness_enabled,
             "fairness_lead_cap_answers": self.fairness_lead_cap_answers,
             "max_midstream_injections_per_round": self.max_midstream_injections_per_round,
+            "max_checklist_calls_per_round": self.max_checklist_calls_per_round,
+            "checklist_first_answer": self.checklist_first_answer,
             "timeout_config": {
                 "orchestrator_timeout_seconds": self.timeout_config.orchestrator_timeout_seconds,
                 "initial_round_timeout_seconds": self.timeout_config.initial_round_timeout_seconds,
@@ -1085,6 +1114,8 @@ class AgentConfig:
         fairness_enabled = data.get("fairness_enabled", True)
         fairness_lead_cap_answers = data.get("fairness_lead_cap_answers", 2)
         max_midstream_injections_per_round = data.get("max_midstream_injections_per_round", 2)
+        max_checklist_calls_per_round = data.get("max_checklist_calls_per_round", 1)
+        checklist_first_answer = data.get("checklist_first_answer", False)
 
         # Handle timeout_config
         timeout_config = TimeoutConfig()
@@ -1122,6 +1153,8 @@ class AgentConfig:
             fairness_enabled=fairness_enabled,
             fairness_lead_cap_answers=fairness_lead_cap_answers,
             max_midstream_injections_per_round=max_midstream_injections_per_round,
+            max_checklist_calls_per_round=max_checklist_calls_per_round,
+            checklist_first_answer=checklist_first_answer,
             timeout_config=timeout_config,
             coordination_config=coordination_config,
         )
