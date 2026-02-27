@@ -1,107 +1,75 @@
-# MassGen v0.1.57 Roadmap
+# MassGen v0.1.58 Roadmap
 
 ## Overview
 
-Version 0.1.57 focuses on per-subagent runtime isolation in Docker environments and improving the iterative refinement loop for better convergence detection and quality-driven iteration.
+Version 0.1.58 focuses on adding ElevenLabs as a provider for text-to-speech and speech-to-text, integrated with MassGen's existing multimodal tools.
 
-- **Per-Subagent Runtime Isolation in Docker** (Required): True per-subagent isolation when parent runs in Docker
-- **Improve Iterative Refinement** (Required): Better convergence detection and quality-driven iteration
+- **ElevenLabs TTS & STT Support** (Required): Add ElevenLabs support for TTS and speech-to-text in generate/read media
 
 ## Key Technical Priorities
 
-1. **Subagent Isolation**: Provide true per-subagent runtime isolation so each subagent has its own execution boundary when MassGen runs inside Docker
-   **Use Case**: Subagent evaluators that launch local servers no longer interfere with one another
-
-2. **Iterative Refinement**: Fix checklist off-ramp and convergence detection to distinguish genuine vs incremental improvement
-   **Use Case**: Agents stop when quality is sufficient, push harder when there's real room to improve
+1. **ElevenLabs Integration**: Add ElevenLabs as a provider for high-quality voice synthesis and transcription
+   **Use Case**: High-quality voice synthesis and transcription via ElevenLabs API within multi-agent workflows
 
 ## Key Milestones
 
-### Milestone 1: Per-Subagent Runtime Isolation in Docker (REQUIRED)
+### Milestone 1: ElevenLabs TTS & STT Support (REQUIRED)
 
-**Goal**: True per-subagent runtime isolation when parent runs in Docker
-
-**Owner**: @ncrispino (nickcrispino on Discord)
-
-**Issue**: [#910](https://github.com/massgen/MassGen/issues/910)
-
-#### 1.1 Runtime Architecture
-- [ ] Define runtime architecture where subagents do not share command/process/network namespace by default
-- [ ] Make launch mode explicit (no silent downgrade from docker to local for subagent execution paths)
-- [ ] Eliminate port collisions, shared server state, and ambiguous timeout behavior
-
-#### 1.2 Communication Contract
-- [ ] Preserve existing subagent communication contract (answer files, workspace handoff, status/log streaming) across isolation modes
-- [ ] Test containerized parent runs with concurrent subagents that each start local servers
-
-#### 1.3 Testing & Validation
-- [ ] Add tests covering containerized parent with concurrent server-launching subagents
-- [ ] Verify subagent UX preserved (logs, status, streaming, cancellation, workspace/context semantics)
-- [ ] Update documentation
-
-**Success Criteria**:
-- Subagents run in isolated runtime environments when parent is in Docker
-- No port collisions or shared state between concurrent subagents
-- Existing subagent communication contract preserved
-
----
-
-### Milestone 2: Improve Iterative Refinement (REQUIRED)
-
-**Goal**: Better convergence detection and quality-driven iteration
+**Goal**: Add ElevenLabs as a provider for text-to-speech and speech-to-text
 
 **Owner**: @ncrispino (nickcrispino on Discord)
 
-**Issue**: [#874](https://github.com/massgen/MassGen/issues/874)
+**Issue**: [#942](https://github.com/massgen/MassGen/issues/942)
 
-#### 2.1 Fix Checklist Off-Ramp
-- [ ] Make `_checklist_required_true` respect voting threshold (currently hardcoded to all items)
-- [ ] Relax off-ramp so convergence is reachable when only stretch items fail
-- [ ] Fix core/stretch categorization to enable smarter convergence decisions
+#### 1.1 Text-to-Speech Integration
+- [ ] Add ElevenLabs TTS provider in `massgen/generation/` module
+- [ ] Integrate with existing `generate_media` tool for audio output
+- [ ] Support voice selection and configuration options
+- [ ] Handle API key management and rate limiting
 
-#### 2.2 Convergence Detection
-- [ ] Implement improvement categorization: transformative, structural, incremental
-- [ ] Add LLM-based comparison between round N and round N-1 answers
-- [ ] Scale back overcorrection from low voting sensitivity when improvements are incremental
+#### 1.2 Speech-to-Text Integration
+- [ ] Add ElevenLabs STT provider for audio transcription
+- [ ] Integrate with existing `read_media` tool for audio input
+- [ ] Support multiple audio formats and languages
 
-#### 2.3 Testing & Documentation
-- [ ] Test convergence detection across different quality scenarios
-- [ ] Verify checklist off-ramp behavior with various voting thresholds
-- [ ] Document new convergence behavior and configuration options
+#### 1.3 Testing & Documentation
+- [ ] Add unit tests for ElevenLabs TTS provider
+- [ ] Add unit tests for ElevenLabs STT provider
+- [ ] Add integration tests with `generate_media` and `read_media`
+- [ ] Update multimodal documentation with ElevenLabs configuration examples
+- [ ] Add example configs in `massgen/configs/`
 
 **Success Criteria**:
-- Checklist off-ramp respects voting threshold configuration
-- Convergence detection distinguishes incremental from structural improvements
-- Agents stop iterating when improvements are merely incremental
+- ElevenLabs TTS working via `generate_media`
+- ElevenLabs STT working via `read_media`
+- Proper error handling for missing API keys and rate limits
 
 ---
 
 ## Timeline
 
-**Target Release**: February 27, 2026
+**Target Release**: March 2, 2026
 
-### Phase 1 (Feb 25-26)
-- Subagent Runtime Isolation (Milestone 1.1, 1.2)
-- Checklist Off-Ramp Fix (Milestone 2.1)
+### Phase 1 (Feb 28 - Mar 1)
+- ElevenLabs TTS Integration (Milestone 1.1)
+- ElevenLabs STT Integration (Milestone 1.2)
 
-### Phase 2 (Feb 26-27)
-- Convergence Detection (Milestone 2.2)
-- Testing & Validation (Milestones 1.3, 2.3)
+### Phase 2 (Mar 1-2)
+- Testing & Documentation (Milestone 1.3)
 
 ---
 
 ## Success Metrics
 
-- **Isolation Quality**: No port collisions or shared state between concurrent subagents in Docker
-- **Convergence Accuracy**: Agents correctly identify when improvements are incremental vs structural
-- **Off-Ramp Reachability**: Checklist convergence reachable with reasonable voting threshold settings
+- **TTS Quality**: ElevenLabs TTS produces correct audio output via `generate_media`
+- **STT Accuracy**: ElevenLabs STT correctly transcribes audio via `read_media`
+- **Integration**: Both tools work within multi-agent coordination workflows
 
 ---
 
 ## Resources
 
-- **Issue #910**: [Per-Subagent Runtime Isolation](https://github.com/massgen/MassGen/issues/910)
-- **Issue #874**: [Improve Iterative Refinement](https://github.com/massgen/MassGen/issues/874)
+- **Issue #942**: [ElevenLabs TTS & STT Support](https://github.com/massgen/MassGen/issues/942)
 - **Owner**: @ncrispino (nickcrispino on Discord)
 - **Related PRs**: TBD
 
@@ -118,7 +86,8 @@ This release builds on previous work:
 - **v0.1.54**: Copilot SDK Backend (#862), Subagent Messaging (#926), Gemini 3.1 Pro
 - **v0.1.55**: Specialized Subagent Types (#938), Dynamic Evaluation Criteria, Native Image Routing
 - **v0.1.56**: Critic Subagent (#945), Spec Plan Mode, Audio Multimodal, ask_others Targeting
+- **v0.1.57**: Delegation Protocol (#955), Builder Subagent, Substantiveness Tracking, Claude Code Reasoning
 
 And sets the foundation for:
-- **v0.1.58**: ElevenLabs TTS & STT (#942)
-- **v0.1.59**: Improve skill use and exploration (#873)
+- **v0.1.59**: Nano Banana 2 Default Image Generation (#951)
+- **v0.1.60**: Improve skill use and exploration (#873)

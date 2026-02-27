@@ -1,10 +1,10 @@
 # MassGen Roadmap
 
-**Current Version:** v0.1.56
+**Current Version:** v0.1.57
 
 **Release Schedule:** Mondays, Wednesdays, Fridays @ 9am PT
 
-**Last Updated:** February 25, 2026
+**Last Updated:** February 27, 2026
 
 This roadmap outlines MassGen's development priorities for upcoming releases. Each release focuses on specific capabilities with real-world use cases.
 
@@ -42,36 +42,11 @@ Want to contribute or collaborate on a specific track? Reach out to the track ow
 
 | Release | Target | Feature | Owner | Use Case |
 |---------|--------|---------|-------|----------|
-| **v0.1.57** | 02/27/26 | Per-Subagent Runtime Isolation in Docker | @ncrispino | True per-subagent isolation when parent runs in Docker ([#910](https://github.com/massgen/MassGen/issues/910)) |
-| | | Improve Iterative Refinement | @ncrispino | Better convergence detection and quality-driven iteration ([#874](https://github.com/massgen/MassGen/issues/874)) |
-| **v0.1.58** | 03/01/26 | ElevenLabs TTS & STT Support | @ncrispino | Add ElevenLabs support for TTS and speech-to-text in generate/read media ([#942](https://github.com/massgen/MassGen/issues/942)) |
-| **v0.1.59** | 03/04/26 | Improve Skill Use and Exploration | @ncrispino | Local skill execution, skill registry, and lifecycle management ([#873](https://github.com/massgen/MassGen/issues/873)) |
+| **v0.1.58** | 03/02/26 | ElevenLabs TTS & STT Support | @ncrispino | Add ElevenLabs support for TTS and speech-to-text in generate/read media ([#942](https://github.com/massgen/MassGen/issues/942)) |
+| **v0.1.59** | 03/04/26 | Nano Banana 2 Default Image Generation | @ncrispino | Support Nano Banana 2 as default image generation model ([#951](https://github.com/massgen/MassGen/issues/951)) |
+| **v0.1.60** | 03/06/26 | Improve Skill Use and Exploration | @ncrispino | Local skill execution, skill registry, and lifecycle management ([#873](https://github.com/massgen/MassGen/issues/873)) |
 
 *All releases ship on MWF @ 9am PT when ready*
-
----
-
-## 📋 v0.1.57 - Subagent Isolation & Iterative Refinement
-
-### Features
-
-**1. Per-Subagent Runtime Isolation in Docker** (@ncrispino)
-- Issue: [#910](https://github.com/massgen/MassGen/issues/910)
-- True per-subagent runtime isolation when parent runs in Docker
-- Eliminates port collisions, shared server state, and ambiguous timeout behavior between subagents
-- **Use Case**: Subagent evaluators that launch local servers no longer interfere with one another
-
-**2. Improve Iterative Refinement** (@ncrispino)
-- Issue: [#874](https://github.com/massgen/MassGen/issues/874)
-- Better convergence detection: distinguish genuine vs incremental improvement
-- Fix checklist off-ramp so voting threshold actually affects required pass count
-- Categorize improvements as transformative/structural/incremental for smarter convergence
-- **Use Case**: Agents stop iterating when quality is good enough, push harder when there's real room to improve
-
-### Success Criteria
-- ✅ Subagents run in isolated runtime environments when parent is in Docker
-- ✅ Checklist off-ramp respects voting threshold configuration
-- ✅ Convergence detection distinguishes incremental from structural improvements
 
 ---
 
@@ -91,7 +66,23 @@ Want to contribute or collaborate on a specific track? Reach out to the track ow
 
 ---
 
-## 📋 v0.1.59 - Skill Use & Exploration
+## 📋 v0.1.59 - Nano Banana 2 Image Generation
+
+### Features
+
+**1. Nano Banana 2 Default Image Generation** (@ncrispino)
+- Issue: [#951](https://github.com/massgen/MassGen/issues/951)
+- Support Nano Banana 2 as the default image generation model
+- Integration with existing `generate_media` tool for image output
+- **Use Case**: Higher quality default image generation for multi-agent workflows
+
+### Success Criteria
+- ✅ Nano Banana 2 available as image generation model
+- ✅ Set as default image generation model
+
+---
+
+## 📋 v0.1.60 - Skill Use & Exploration
 
 ### Features
 
@@ -783,6 +774,22 @@ These features are being actively developed on **separate parallel tracks** and 
 - TUI homescreen and theming improvements
 - **Status:** ✅ Completed in v0.1.50
 
+### Track: Subagent Delegation Protocol (@ncrispino, nickcrispino)
+- PR: [#955](https://github.com/massgen/MassGen/pull/955)
+- File-based delegation protocol for container-to-host subagent spawning
+- SubagentLaunchWatcher with atomic JSON request/response exchange
+- Workspace path validation against allowlist for security
+- **Status:** ✅ Completed in v0.1.57
+
+### Track: Iterative Refinement Improvements (@ncrispino, nickcrispino)
+- PR: [#955](https://github.com/massgen/MassGen/pull/955)
+- Issue: [#874](https://github.com/massgen/MassGen/issues/874)
+- Substantiveness tracking (transformative/structural/incremental) for convergence decisions
+- Builder subagent type for large artifact generation with fresh context
+- Diagnostic report gating and per-agent checklist scoring
+- Claude Code reasoning parameters for updated SDK
+- **Status:** ✅ Completed in v0.1.57
+
 ### Track: Coding Agent Enhancements (@ncrispino, nickcrispino)
 - PR: [#251](https://github.com/massgen/MassGen/pull/251)
 - Enhanced file operations and workspace management
@@ -864,5 +871,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code standards, te
 
 *This roadmap is community-driven. Releases ship on **Mondays, Wednesdays, Fridays @ 9am PT**. Timelines may shift based on priorities and feedback. Open an issue to suggest changes!*
 
-**Last Updated:** February 25, 2026
+**Last Updated:** February 27, 2026
 **Maintained By:** MassGen Team
