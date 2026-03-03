@@ -946,6 +946,15 @@ class Orchestrator(ChatAgent):
                 "subagents_enabled": bool(
                     hasattr(self.config, "coordination_config") and hasattr(self.config.coordination_config, "enable_subagents") and self.config.coordination_config.enable_subagents,
                 ),
+                # Impact gate config for propose_improvements validation
+                "improvements": dict(
+                    getattr(
+                        getattr(self.config, "coordination_config", None),
+                        "improvements",
+                        {},
+                    )
+                    or {},
+                ),
             }
             backend._checklist_state = checklist_state
             backend._checklist_items = list(items)
@@ -7092,6 +7101,14 @@ Your answer:"""
                             answers.update(selected_answers)
                             self.agent_states[agent_id].known_answer_ids.update(selected_answers.keys())
                             self._register_injected_answer_updates(agent_id, list(selected_answers.keys()))
+                            # Update context labels BEFORE refreshing checklist state so
+                            # available_agent_labels reflects the newly-injected labels
+                            # (e.g. agent1.2 replacing agent1.1). Same ordering as the
+                            # mid-stream hook path at _build_injection_callback.
+                            self.coordination_tracker.update_agent_context_with_new_answers(
+                                agent_id,
+                                list(selected_answers.keys()),
+                            )
                             self._refresh_checklist_state_for_agent(agent_id)
                             self.agent_states[agent_id].restart_pending = self._has_unseen_answer_updates(agent_id)
 
@@ -7113,10 +7130,6 @@ Your answer:"""
                                 agent_id,
                                 ActionType.UPDATE_INJECTED,
                                 f"Mid-stream (MCP hook): {len(selected_answers)} answer(s)",
-                            )
-                            self.coordination_tracker.update_agent_context_with_new_answers(
-                                agent_id,
-                                list(selected_answers.keys()),
                             )
 
         # Write combined content to hook file
@@ -8422,6 +8435,14 @@ Your answer:"""
             self.agent_states[agent_id].known_answer_ids.update(selected_answers.keys())
             self._register_injected_answer_updates(agent_id, list(selected_answers.keys()))
 
+            # Update context labels BEFORE refreshing checklist state so
+            # available_agent_labels reflects the newly-injected labels
+            # (e.g. agent1.2 replacing agent1.1). Same ordering as all other paths.
+            self.coordination_tracker.update_agent_context_with_new_answers(
+                agent_id,
+                list(selected_answers.keys()),
+            )
+
             # Refresh checklist tool state after injection (streak may have reset)
             self._refresh_checklist_state_for_agent(agent_id)
 
@@ -8446,12 +8467,6 @@ Your answer:"""
                 agent_id,
                 ActionType.UPDATE_INJECTED,
                 f"Mid-stream (native): {len(selected_answers)} answer(s)",
-            )
-
-            # Update agent's context labels
-            self.coordination_tracker.update_agent_context_with_new_answers(
-                agent_id,
-                list(selected_answers.keys()),
             )
 
             return injection
