@@ -58,9 +58,15 @@ MassGen supports these backend types (configured via ``type`` field in YAML):
    * - ``lmstudio``
      - LM Studio
      - Local open-source models
+   * - ``codex``
+     - OpenAI (CLI)
+     - GPT-5.4, GPT-5.3-Codex, GPT-5.2-Codex, GPT-5.1-Codex, GPT-4.1
    * - ``copilot``
      - GitHub Copilot
-     - GPT-5-mini, GPT-4, Claude Sonnet 4, Gemini 2.5 Pro
+     - GPT-5-mini, GPT-4.1, Claude Sonnet 4, Gemini 2.5 Pro
+   * - ``inference``
+     - vLLM / SGLang
+     - Any locally served model
    * - ``chatcompletion``
      - Generic
      - Any OpenAI-compatible API
@@ -114,16 +120,26 @@ Different backends support different built-in tools:
      - ✅
      - ⭐
      - ✅
-   * - ``copilot``
+   * - ``codex``
      - ⭐
      - ❌
-     - ❌
+     - ⭐
      - 🔧
      - 🔧
      - 🔧
      - ✅
+     - ⭐
+     - ✅
+   * - ``copilot``
+     - ⭐
      - ❌
-     - ❌
+     - ✅
+     - 🔧
+     - 🔧
+     - 🔧
+     - ✅
+     - ✅
+     - ✅
    * - ``gemini``
      - ⭐
      - ⭐
@@ -184,6 +200,16 @@ Different backends support different built-in tools:
      - ✅
      - ✅
      - ✅
+   * - ``zai``
+     - ❌
+     - ❌
+     - ✅
+     - 🔧
+     - 🔧
+     - 🔧
+     - ✅
+     - ✅
+     - ✅
    * - ``inference``
      - ❌
      - ❌
@@ -217,7 +243,7 @@ Different backends support different built-in tools:
 * **Custom Tools:**
 
   * Custom tools allow you to give agents access to your own Python functions
-  * Most backends support custom tools (OpenAI, Claude, Claude Code, Gemini, Grok, Chat Completions, LM Studio, Inference)
+  * Most backends support custom tools (OpenAI, Claude, Claude Code, Codex, Copilot, Gemini, Grok, Chat Completions, LM Studio, ZAI, Inference)
   * **Azure OpenAI** and **AG2** do not support custom tools as they inherit from the base backend class without the custom tools layer
   * Custom tools are essential for multimodal understanding features (``understand_image``, ``understand_video``, ``understand_audio``, ``understand_file``)
   * See :doc:`tools/custom_tools` for complete documentation on creating and using custom tools
@@ -238,7 +264,7 @@ Different backends support different built-in tools:
 
   * **Bash/Shell**: MassGen-level feature with **direct workspace access**
 
-    * ⭐ (``claude_code`` only): Native Bash tool built into Claude Code
+    * ⭐ (``claude_code``, ``codex``, ``gemini_cli``): Native shell/bash tools built into the backend CLI/SDK
     * ✅ (all MCP-enabled backends): Universal bash/shell via ``enable_mcp_command_line: true``
     * **When to use**: Code that needs to interact with your project files, run tests, execute scripts
     * See :doc:`tools/code_execution` for detailed setup and comparison
@@ -247,7 +273,7 @@ Different backends support different built-in tools:
 
 * **Filesystem:**
 
-  * ⭐ (``claude_code`` only): Native filesystem tools (Read, Write, Edit, Bash, Grep, Glob)
+  * ⭐ (``claude_code``, ``codex``, ``gemini_cli``): Native filesystem tools via CLI/SDK (Read, Write, Edit, Bash, etc.)
   * ✅ (all backends with ``cwd`` parameter): Filesystem operations handled automatically through workspace configuration
   * See :doc:`files/file_operations` for detailed filesystem configuration
 
@@ -1105,8 +1131,10 @@ Ensure the backend type is correct:
    # Correct backend types
    type: "openai"         # ✅
    type: "claude_code"    # ✅
+   type: "codex"          # ✅
    type: "copilot"        # ✅
    type: "gemini"         # ✅
+   type: "gemini_cli"     # ✅
 
    # Incorrect (common mistakes)
    type: "gpt"            # ❌ Use "openai"
@@ -1123,9 +1151,12 @@ Check your ``.env`` file has the correct variable name:
    openai       → OPENAI_API_KEY
    claude       → ANTHROPIC_API_KEY
    claude_code  → CLAUDE_CODE_API_KEY (falls back to ANTHROPIC_API_KEY)
+   codex        → OPENAI_API_KEY (or use `codex login` for OAuth)
    copilot      → GH_TOKEN or GITHUB_TOKEN (or use /login in Copilot CLI)
    gemini       → GOOGLE_API_KEY
+   gemini_cli   → GOOGLE_API_KEY or GEMINI_API_KEY (or use `gemini` login)
    grok         → XAI_API_KEY
+   zai          → ZAI_API_KEY
    azure_openai → AZURE_OPENAI_API_KEY
 
 .. note::

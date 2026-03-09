@@ -9132,6 +9132,23 @@ Your answer:"""
         if agent_hooks:
             manager.register_hooks_from_config(agent_hooks, agent_id=agent_id)
 
+        # Register PathPermissionManagerHook for PRE_TOOL_USE validation.
+        # Native backends like Copilot need MassGen-level path validation.
+        # Claude Code already handles permissions via add_dirs, so skip it.
+        backend_provider = agent.backend.get_provider_name() if hasattr(agent.backend, "get_provider_name") else ""
+        if backend_provider != "claude_code":
+            _fm = getattr(agent.backend, "filesystem_manager", None)
+            if _fm:
+                _ppm = getattr(_fm, "path_permission_manager", None)
+                if _ppm:
+                    from massgen.filesystem_manager import PathPermissionManagerHook
+
+                    ppm_hook = PathPermissionManagerHook(_ppm)
+                    manager.register_global_hook(HookType.PRE_TOOL_USE, ppm_hook)
+                    logger.debug(
+                        f"[Orchestrator] Registered PathPermissionManagerHook (PRE_TOOL_USE) for {agent_id}",
+                    )
+
         # Create context factory for hooks
         def context_factory() -> dict[str, Any]:
             workspace_path = None
