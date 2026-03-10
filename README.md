@@ -266,6 +266,16 @@ The `--quickstart` command will:
 - If Docker mode is selected, show a Skills step where you can choose package(s) (`openskills`-based Anthropic/OpenAI/Vercel/Agent Browser plus Crawl4AI) and install them in-place with live status
 - Create a ready-to-use config and launch into interactive TUI mode
 
+**🤖 Use MassGen from Your AI Coding Agent:**
+
+Install the [MassGen skill](https://github.com/massgen/skills) to invoke MassGen directly from Claude Code, OpenAI Codex, GitHub Copilot, Cursor, and [40+ other agents](https://skills.sh) that support the [Agent Skills](https://agentskills.io/home) standard:
+
+```bash
+npx skills add massgen/skills
+```
+
+Then use `/massgen` (Claude Code) or `$massgen` (Codex) to run multi-agent evaluation, planning, spec writing, or any general task. See the [skills docs](https://docs.massgen.ai/en/latest/user_guide/skills.html) for per-agent install options.
+
 **🖥️ Textual TUI (Default Display Mode):**
 
 MassGen launches with an interactive Terminal User Interface (TUI) by default, providing:

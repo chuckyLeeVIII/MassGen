@@ -70,6 +70,16 @@ MassGen is a cutting-edge multi-agent framework that coordinates AI agents throu
 
 See visual comparisons between MassGen and single-agent solutions, highlighting how MassGen unifies different agentic approaches for better outcomes.
 
+.. raw:: html
+
+   <div style="text-align: center; margin: 20px 0;">
+     <a href="user_guide/skills.html" style="display: inline-block; padding: 12px 24px; background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); color: #1a1a2e; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 1.1em; box-shadow: 0 4px 15px rgba(67, 233, 123, 0.4); transition: transform 0.2s, box-shadow 0.2s;">
+       &#129520; Install the MassGen Skill for Your AI Agent &rarr;
+     </a>
+   </div>
+
+Use MassGen from Claude Code, Codex, Copilot, Cursor, and other AI coding agents.
+
 
 How Does MassGen Compare?
 -------------------------
@@ -224,6 +234,7 @@ Documentation
    .. grid-item-card:: 📖 User Guide
 
       * :doc:`user_guide/concepts`
+      * :doc:`user_guide/skills`
       * :doc:`user_guide/webui`
       * :doc:`user_guide/tools/index`
       * :doc:`user_guide/integration/index`
@@ -250,6 +261,7 @@ Documentation
    :caption: User Guide
 
    user_guide/concepts
+   user_guide/skills
    user_guide/task_planning
    user_guide/backends
    user_guide/webui

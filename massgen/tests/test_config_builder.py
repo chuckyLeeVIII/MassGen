@@ -456,7 +456,7 @@ class TestQuickstartDecompositionSettings:
         assert orch["voting_threshold"] == 3
         assert orch["max_new_answers_per_agent"] == 2
         assert orch["max_new_answers_global"] == 9
-        assert orch["answer_novelty_requirement"] == "balanced"
+        assert "answer_novelty_requirement" not in orch
         assert orch["fairness_enabled"] is True
         assert orch["fairness_lead_cap_answers"] == 2
         assert orch["max_midstream_injections_per_round"] == 2
@@ -689,8 +689,8 @@ class TestHeadlessQuickstartMultiBackend:
         model = builder._resolve_default_model("gemini")
         assert model  # Should find a model from provider info
 
-    def test_multi_backend_comma_parsing(self, builder, tmp_path, monkeypatch):
-        """Comma-separated backends are parsed into a list."""
+    def test_explicit_agent_specs_are_used(self, builder, tmp_path, monkeypatch):
+        """Explicit agent specs create one agent per entry."""
         # Mock API keys as available for all requested backends
         monkeypatch.setattr(
             builder,
@@ -709,8 +709,11 @@ class TestHeadlessQuickstartMultiBackend:
 
         result = builder.run_quickstart_headless(
             output_dir=str(tmp_path),
-            backend_override="claude,openai,gemini",
-            model_override="claude-opus-4-6,gpt-5.4,gemini-3-flash-preview",
+            agent_specs=[
+                {"backend": "claude", "model": "claude-opus-4-6"},
+                {"backend": "openai", "model": "gpt-5.4"},
+                {"backend": "gemini", "model": "gemini-3-flash-preview"},
+            ],
             use_docker=False,
         )
 
@@ -721,8 +724,8 @@ class TestHeadlessQuickstartMultiBackend:
         assert len(configs_written) == 1
         assert len(configs_written[0]) == 3
 
-    def test_multi_backend_missing_models_use_defaults(self, builder, tmp_path, monkeypatch):
-        """When fewer models than backends, defaults are used."""
+    def test_agent_specs_missing_models_use_defaults(self, builder, tmp_path, monkeypatch):
+        """Agent specs without a model use the provider default."""
         monkeypatch.setattr(
             builder,
             "detect_api_keys",
@@ -739,8 +742,10 @@ class TestHeadlessQuickstartMultiBackend:
 
         result = builder.run_quickstart_headless(
             output_dir=str(tmp_path),
-            backend_override="claude,openai",
-            model_override="claude-opus-4-6",  # Only one model for two backends
+            agent_specs=[
+                {"backend": "claude", "model": "claude-opus-4-6"},
+                {"backend": "openai"},
+            ],
             use_docker=False,
         )
 
@@ -751,8 +756,8 @@ class TestHeadlessQuickstartMultiBackend:
         # Second model should be the default for openai
         assert result["models"][1]  # Non-empty default
 
-    def test_multi_backend_missing_key_fails(self, builder, tmp_path, monkeypatch):
-        """Multi-backend fails when one backend has no API key."""
+    def test_agent_specs_missing_key_fails(self, builder, tmp_path, monkeypatch):
+        """Explicit agent specs fail when one backend has no API key."""
         monkeypatch.setattr(
             builder,
             "detect_api_keys",
@@ -761,12 +766,34 @@ class TestHeadlessQuickstartMultiBackend:
 
         result = builder.run_quickstart_headless(
             output_dir=str(tmp_path),
-            backend_override="claude,openai,gemini",
+            agent_specs=[
+                {"backend": "claude"},
+                {"backend": "openai"},
+                {"backend": "gemini"},
+            ],
             use_docker=False,
         )
 
         assert not result["success"]
         assert any("openai" in step for step in result["manual_steps"])
+
+    def test_csv_backend_override_is_rejected(self, builder, tmp_path, monkeypatch):
+        """CSV backend/model overrides are replaced by explicit agent specs."""
+        monkeypatch.setattr(
+            builder,
+            "detect_api_keys",
+            lambda: {"claude": True, "openai": True, "gemini": True},
+        )
+
+        result = builder.run_quickstart_headless(
+            output_dir=str(tmp_path),
+            backend_override="claude,openai,gemini",
+            model_override="claude-opus-4-6,gpt-5.4,gemini-3-flash-preview",
+            use_docker=False,
+        )
+
+        assert not result["success"]
+        assert any("--quickstart-agent" in step for step in result["manual_steps"])
 
     def test_single_backend_still_works(self, builder, tmp_path, monkeypatch):
         """Single backend (no comma) still uses original code path."""

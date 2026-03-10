@@ -151,6 +151,48 @@ class TestHeadlessOverrides:
 
         assert result["success"] is False
 
+    def test_csv_multi_backend_override_is_rejected(self, tmp_path, monkeypatch):
+        """CSV multi-backend overrides should point callers to --quickstart-agent."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+        from massgen.config_builder import ConfigBuilder
+
+        builder = ConfigBuilder()
+        result = builder.run_quickstart_headless(
+            output_dir=str(tmp_path),
+            backend_override="claude,openai,gemini",
+            model_override="claude-opus-4-6,gpt-5.4,gemini-3-flash-preview",
+        )
+
+        assert result["success"] is False
+        assert any("--quickstart-agent" in step for step in result["manual_steps"])
+
+    def test_explicit_agent_specs_support_mixed_providers(self, tmp_path, monkeypatch):
+        """Explicit agent specs create a mixed-provider config."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+        from massgen.config_builder import ConfigBuilder
+
+        builder = ConfigBuilder()
+        result = builder.run_quickstart_headless(
+            output_dir=str(tmp_path),
+            use_docker=False,
+            agent_specs=[
+                {"backend": "claude", "model": "claude-opus-4-6"},
+                {"backend": "openai", "model": "gpt-5.4"},
+                {"backend": "gemini", "model": "gemini-3-flash-preview"},
+            ],
+        )
+
+        assert result["success"] is True
+        assert result["backends"] == ["claude", "openai", "gemini"]
+        config = yaml.safe_load(Path(result["config_path"]).read_text())
+        assert [agent["backend"]["type"] for agent in config["agents"]] == ["claude", "openai", "gemini"]
+
 
 class TestHeadlessEnvTemplate:
     """Env template generation."""
@@ -296,6 +338,23 @@ class TestHeadlessDocker:
             backend = agent["backend"]
             assert backend.get("command_line_execution_mode") != "docker"
 
+    def test_local_mode_still_enables_skills(self, tmp_path, monkeypatch):
+        """Local quickstart should keep built-in skills enabled."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+
+        from massgen.config_builder import ConfigBuilder
+
+        builder = ConfigBuilder()
+        result = builder.run_quickstart_headless(
+            output_dir=str(tmp_path),
+            use_docker=False,
+        )
+
+        assert result["success"] is True
+        config = yaml.safe_load(Path(result["config_path"]).read_text())
+        coordination = config["orchestrator"]["coordination"]
+        assert coordination["use_skills"] is True
+
 
 # ---------------------------------------------------------------------------
 # CLI argument parsing and dispatch
@@ -404,7 +463,7 @@ class TestHeadlessSummaryPrinting:
         result = {
             "success": False,
             "config_path": None,
-            "env_template_path": ".massgen/.env",
+            "env_template_path": ".env",
             "backend": None,
             "model": None,
             "api_keys_summary": {
@@ -415,7 +474,7 @@ class TestHeadlessSummaryPrinting:
             "docker_pulled": False,
             "skills_installed": False,
             "messages": [],
-            "manual_steps": ["Fill in API keys in .massgen/.env, then re-run"],
+            "manual_steps": ["Fill in API keys in .env, then re-run"],
         }
 
         _print_headless_quickstart_summary(result)

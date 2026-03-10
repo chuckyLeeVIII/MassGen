@@ -1,13 +1,18 @@
 ---
 name: massgen
-description: Invoke MassGen's multi-agent system for evaluation, planning, or spec writing. Use whenever you need outside perspective on your work, a thoroughly refined plan, or a well-specified set of requirements. Perfect for: pre-PR review, complex project planning, feature specification, architecture decisions, or any task where multi-agent iteration produces better results than working alone.
+description: "Invoke MassGen's multi-agent system for general-purpose tasks, evaluation, planning, or spec writing. Use whenever you want multiple AI agents to tackle a problem, need outside perspective on your work, a thoroughly refined plan, or a well-specified set of requirements. Perfect for: writing, code generation, research, design, analysis, pre-PR review, complex project planning, feature specification, architecture decisions, or any task where multi-agent iteration produces better results than working alone."
 ---
 
 # MassGen
 
-Invoke MassGen for multi-agent iteration on evaluation, planning, or spec writing. Multiple AI agents independently work on the problem and converge on the strongest result through MassGen's checklist-gated voting system.
+Invoke MassGen for multi-agent iteration on any task — general-purpose work, evaluation, planning, or spec writing. Multiple AI agents independently work on the problem and converge on the strongest result through MassGen's checklist-gated voting system.
 
 ## When to Use
+
+**General** (default) — get multi-agent results on any task:
+- When you want multiple AI agents to independently tackle a problem
+- When the task doesn't fit neatly into evaluate, plan, or spec
+- Writing, research, code generation, design, analysis, or any open-ended task
 
 **Evaluate** — get diverse, critical feedback on existing work:
 - After iterating and stalling — need outside perspective
@@ -28,6 +33,7 @@ Invoke MassGen for multi-agent iteration on evaluation, planning, or spec writin
 
 | Mode | Purpose | Input | Output | Default Criteria Preset |
 |------|---------|-------|--------|------------------------|
+| general | Any task | Task description + context | Winner's deliverables in `result.md` + workspace files | Auto-generated |
 | evaluate | Critique existing work | Artifacts to evaluate | `critique_packet.md`, `verdict.json`, `next_tasks.json` | `"evaluation"` |
 | plan | Create or refine a plan | Goal + constraints (+ existing plan) | `project_plan.json` (tasks, chunks, deps, verification) | `"planning"` |
 | spec | Create or refine a spec | Problem + needs (+ existing spec) | `project_spec.json` (EARS requirements, chunks, rationale) | `"spec"` |
@@ -39,11 +45,23 @@ produce far better results than unscoped "do everything" runs.
 
 **When invoking this skill, specify the scope:**
 
+- **General**: the task to accomplish, relevant context, quality expectations
 - **Evaluate**: which files/artifacts to evaluate, what to ignore, evaluation focus
 - **Plan**: the goal/objective, constraints, what context to include
 - **Spec**: the problem to specify, user needs, system boundaries
 
 If the user doesn't specify scope, ask them.
+
+## Important: Setup Requires Human Input
+
+MassGen setup (API key configuration, provider selection, Docker choice) currently
+requires human interaction. Before invoking this skill, ensure the environment is
+already set up — either a `.massgen/config.yaml` exists or the user has provided
+a config path. If no config exists, the Setup step below will need user input.
+
+**Config fallback behavior**: If there is no interactive user available (e.g.,
+running in a non-interactive agent environment), use whatever config was provided
+or fall back to `.massgen/config.yaml`. Do not attempt setup without a user present.
 
 ## Prerequisites
 
@@ -62,65 +80,68 @@ uv pip install massgen
 
 ### 2. Resolve configuration
 
-Ask the user (via AskUserQuestion in interactive environments):
+Prefer the lowest-friction path first — do NOT ask unnecessary setup questions:
 
-> Do you have an existing MassGen config you'd like to use?
-> If so, provide the path. Otherwise I'll use `.massgen/config.yaml`
-> (or set one up if it doesn't exist).
-
-- **User provides a config path**: use it with `--config <path>` in Step 4
-- **User says no / default**: check if `.massgen/config.yaml` exists
-  - If it exists: use it (no `--config` flag needed)
-  - If it doesn't exist: proceed to **Setup** below
+1. If the user provides a specific config path, use it with `--config <path>` in Step 4.
+2. Otherwise, check for an existing project config at `.massgen/config.yaml`.
+3. If that does not exist, check for a global default config at `~/.config/massgen/config.yaml`.
+4. If either default exists, use it without asking extra setup questions.
+5. If no config exists and a user is available, ask them which config to use or proceed to **Setup** below.
+6. If no config exists and no user is available, stop — setup requires human input.
 
 ### 3. Setup (only if no config exists)
 
-Ask the user two things:
+Prefer the browser quickstart first:
 
-**Question 1 — Execution mode** (recommend Docker):
+```bash
+uv run massgen --web-quickstart
+```
 
-> Should MassGen agents run in **Docker containers** (recommended — isolated
-> and safer for code execution) or **locally**?
+This opens a temporary setup flow in the browser, lets the user enter API keys,
+choose Docker or local execution, configure agents, review the generated YAML,
+pick project vs global save location, and then exits automatically when setup is
+finished.
 
-**Question 2 — AI provider(s) and model(s):**
+Only fall back to headless quickstart when:
+- the browser flow is unavailable
+- the user explicitly asks for a non-browser flow
+- you are operating in an environment where opening the browser is not practical
+
+For headless fallback, first inspect supported backends if needed:
+
+```bash
+uv run massgen --list-backends
+```
+
+Then use one of these:
+
+```bash
+# Single provider (three agents on one backend)
+uv run massgen --quickstart --headless \
+  --config-backend <backend_type> \
+  --config-model <model> \
+  --config-docker
+
+# Mixed providers (one explicit agent per backend)
+uv run massgen --quickstart --headless \
+  --quickstart-agent backend=claude,model=claude-opus-4-6 \
+  --quickstart-agent backend=openai,model=gpt-5.4 \
+  --quickstart-agent backend=gemini,model=gemini-3-flash-preview \
+  --config-docker
+```
+
+Omit `--config-docker` if the user wants local execution.
+
+If authentication is missing:
+- for login-based backends (`claude_code`, `codex`, `copilot`), help the user run the provider login flow
+- for API key backends, help the user populate either `./.env` or `~/.massgen/.env`
+
+If quickstart still needs manual provider/model selection, ask only the minimum necessary follow-up question.
 
 To see all supported backends, models, capabilities, and auth requirements:
 ```bash
 uv run massgen --list-backends
 ```
-
-Ask the user which provider(s) and model(s) to use. They can pick one
-provider for all agents, or mix providers for diversity.
-
-Once the user picks, ensure authentication is set up. Agent-based backends
-(`claude_code`, `codex`, `copilot`) support local login as an alternative
-to API keys:
-
-- **Login-based**: tell the user to run the provider's login command
-  (e.g., `claude login`, `codex login`) if not already logged in
-- **API key-based**: check if the relevant env var is set (visible in the
-  `--list-backends` output). If not, help create a `.env` file with the
-  appropriate variable and tell the user to fill in their key
-
-**Generate the config** using headless quickstart with the user's choices:
-
-```bash
-# Single provider (3 agents, all same backend):
-uv run massgen --quickstart --headless \
-  --config-backend <backend_type> \
-  --config-model <model> \
-  --config-docker  # include only if user chose Docker
-
-# Multi-provider (one agent per backend, diverse perspectives):
-uv run massgen --quickstart --headless \
-  --config-backend claude,openai,gemini \
-  --config-model claude-opus-4-6,gpt-5.4,gemini-3-flash-preview \
-  --config-docker
-```
-
-This generates `.massgen/config.yaml`, installs default skills, and
-pulls the Docker image if Docker was selected. If an API key is missing,
-it creates a `.env` template for the user to fill in.
 
 ## Workflow
 
@@ -129,7 +150,7 @@ it creates a `.env` template for the user to fill in.
 Create a timestamped subdirectory so parallel invocations don't conflict:
 
 ```bash
-MODE="evaluate"  # or "plan" or "spec"
+MODE="general"  # or "evaluate", "plan", or "spec"
 WORK_DIR=".massgen/$MODE/$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$WORK_DIR"
 ```
@@ -147,6 +168,7 @@ Write `$WORK_DIR/context.md` using the template from the workflow file.
 agents. Do NOT bias them with your opinions about quality — let them discover
 issues independently. That's the whole point of multi-agent evaluation.
 
+- **General**: describe the task, relevant context, quality expectations
 - **Evaluate**: describe what was built, scope, git info, verification evidence
 - **Plan**: describe the goal, constraints, existing context, success criteria
 - **Spec**: describe the problem, user needs, system boundaries, constraints
@@ -158,12 +180,16 @@ Each mode has a default criteria preset that is applied automatically when no
 
 | Mode | Preset | Criteria Count |
 |------|--------|---------------|
+| general | Auto-generated | Based on task content |
 | evaluate | `"evaluation"` | Generated per-task |
 | plan | `"planning"` | 5 must + 3 should |
 | spec | `"spec"` | 3 must + 1 should + 1 could |
 
 **To use the default preset**: omit the `--eval-criteria` flag entirely. MassGen
 will use the preset matching the prompt content.
+
+For general mode, criteria are auto-generated from the task content — omit
+`--eval-criteria` unless you have specific quality axes to enforce.
 
 **To use custom criteria**: read `references/criteria_guide.md` for the format
 and writing guide, then write criteria JSON to `$WORK_DIR/criteria.json`.
@@ -240,7 +266,8 @@ happen.
 - `--eval-criteria`: passes your task-specific criteria JSON (overrides presets)
 - `--output-file`: writes the winning agent's answer to a parseable file
 
-No `--config` flag — uses the default config from `.massgen/config.yaml`.
+If you resolved a custom config path in Step 2, include `--config <path>`.
+Otherwise rely on the default project/global config discovery.
 
 **Timing:** expect 2-10 minutes for standard tasks, 10-30 minutes for complex ones.
 
@@ -249,6 +276,10 @@ No `--config` flag — uses the default config from `.massgen/config.yaml`.
 The output depends on the mode. The winner's workspace path is shown in
 `$WORK_DIR/result.md` (look for "Workspace cwd" or check `status.json` in
 the log directory for `workspace_paths`).
+
+**General mode**: the winner's answer is in `$WORK_DIR/result.md`. Any files
+the agents created are in the winner's workspace (path shown in result.md).
+Copy or reference the workspace files as needed.
 
 **Evaluate mode**: three files — `verdict.json`, `next_tasks.json`, `critique_packet.md`.
 Read `verdict.json` first to determine iterate vs converged.
@@ -266,10 +297,14 @@ See `references/spec/workflow.md` for full output structure.
 
 ### Step 6: Ground in Your Native Task System
 
-**This is the most critical step.** MassGen produced a structured result —
-now you must internalize it by entering your native task/plan mode and
-enumerating every task or requirement as a tracked item. Without this,
-the plan is just text that fades from context as you work.
+**This is the most critical step for evaluate, plan, and spec modes.** MassGen
+produced a structured result — now you must internalize it by entering your
+native task/plan mode and enumerating every task or requirement as a tracked
+item. Without this, the plan is just text that fades from context as you work.
+
+For **general mode**, grounding is optional — it applies when the output
+contains a structured task list or action items, but many general tasks
+produce artifacts (code, documents, designs) rather than task lists.
 
 **Why this matters**: agents that skip this step tend to execute the first
 few tasks, then drift — forgetting verification steps, skipping later
@@ -301,6 +336,9 @@ task, check it off and move to the next one. This creates an execution
 trace that keeps you honest about what's done and what remains.
 
 ### Step 7: Execute and Iterate
+
+**General**: read `result.md` for the winning answer. Copy deliverable
+files from the winner's workspace if applicable.
 
 **Evaluate**: read `verdict.json` — if `"iterate"`, work through the
 tasks you just grounded from `next_tasks.json`. If `"converged"`,
@@ -366,6 +404,17 @@ An outdated plan is worse than no plan.
 
 ## Mode Overviews
 
+### General
+
+Run any task through MassGen's multi-agent system. Agents independently
+produce solutions and converge through checklist-gated voting. Use this
+for tasks that don't fit neatly into evaluate, plan, or spec — writing,
+code generation, research, analysis, design, or anything where multiple
+perspectives improve the result.
+
+See `references/general/workflow.md` for the context template and
+output handling.
+
 ### Evaluate
 
 Critique existing work artifacts. Evaluator agents inspect your code,
@@ -399,6 +448,34 @@ See `references/spec/workflow.md` for the full context template,
 output format, and lifecycle.
 
 ## Condensed Examples
+
+### General: Multi-Agent Task Execution
+
+```bash
+WORK_DIR=".massgen/general/$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$WORK_DIR"
+
+cat > $WORK_DIR/context.md << 'EOF'
+## Task
+Build a responsive landing page for a developer tool that converts
+CSV files to JSON. Single page with hero, features, and CTA sections.
+
+## Context
+- Target audience: developers and data engineers
+- Tech stack: HTML, CSS, vanilla JS (no frameworks)
+- Must work on mobile and desktop
+
+## Quality Expectations
+- Visually polished, not template-looking
+- Fast load time, no external dependencies
+EOF
+
+# Build prompt from references/general/prompt_template.md, then run
+# No --eval-criteria — criteria auto-generated from task
+uv run massgen --automation --no-parse-at-references --cwd-context ro \
+  --output-file $WORK_DIR/result.md \
+  "$(cat $WORK_DIR/prompt.md)" > $WORK_DIR/output.log 2>&1
+```
 
 ### Evaluate: Pre-PR Review
 
@@ -500,6 +577,8 @@ uv run massgen --automation --no-parse-at-references --cwd-context ro \
 
 ## Reference Files
 
+- `references/general/workflow.md` — general mode context template and output handling
+- `references/general/prompt_template.md` — general prompt template with placeholders
 - `references/criteria_guide.md` — how to write quality criteria (format, tiers, examples)
 - `references/evaluate/workflow.md` — evaluate mode context template, output structure, examples
 - `references/evaluate/prompt_template.md` — evaluation prompt template with placeholders

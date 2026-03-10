@@ -11199,18 +11199,19 @@ Your answer:"""
         temp_workspace_path = await self._copy_all_snapshots_to_temp_workspace(parent_agent_id)
         coord_cfg = getattr(self.config, "coordination_config", None)
         evaluator_refine = bool(coord_cfg and getattr(coord_cfg, "round_evaluator_refine", False))
+        spawn_task = self._build_round_evaluator_task(parent_agent_id, answers)
+        spawn_context_paths = self._get_round_evaluator_context_paths(
+            parent_agent_id,
+            temp_workspace_path=temp_workspace_path,
+        )
+        task_payload: dict[str, Any] = {
+            "subagent_id": f"round_eval_r{upcoming_round}",
+            "task": spawn_task,
+            "subagent_type": "round_evaluator",
+            "context_paths": spawn_context_paths,
+        }
         spawn_args: dict[str, Any] = {
-            "tasks": [
-                {
-                    "subagent_id": f"round_eval_r{upcoming_round}",
-                    "task": self._build_round_evaluator_task(parent_agent_id, answers),
-                    "subagent_type": "round_evaluator",
-                    "context_paths": self._get_round_evaluator_context_paths(
-                        parent_agent_id,
-                        temp_workspace_path=temp_workspace_path,
-                    ),
-                },
-            ],
+            "tasks": [task_payload],
             "background": False,
             "refine": evaluator_refine,
         }

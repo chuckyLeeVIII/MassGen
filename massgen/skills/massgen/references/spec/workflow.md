@@ -132,6 +132,7 @@ Organized into purpose-driven subdirectories:
 - `research/` — domain analysis, user research, competitive analysis, prior art
 - `design/` — system design notes, data models, API contracts, integration points
 - `decisions/` — architectural decision records (ADRs), trade-off analyses
+- `requirements/` — user stories, acceptance criteria, persona descriptions
 
 Chunks are ordered as a valid DAG (C01_core, C02_api, etc.).
 

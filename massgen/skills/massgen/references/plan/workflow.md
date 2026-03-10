@@ -105,6 +105,7 @@ Organized into purpose-driven subdirectories:
 - `research/` — background research, prior art, feasibility analysis, codebase exploration notes
 - `framework/` — architecture decisions, technology choices with rationale, design patterns selected
 - `risks/` — risk register, mitigation strategies, dependency analysis
+- `requirements/` — user stories, acceptance criteria, requirements docs
 
 Chunks are ordered as a valid DAG (C01_foundation, C02_backend, etc.).
 

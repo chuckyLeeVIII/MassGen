@@ -9784,11 +9784,8 @@ Type your question and press Enter to ask the agents.
                     by_id[subagent_id] = merged
                     return merged
 
-                # Ignore non-terminal file entries when we already have a live snapshot.
-                entry_status = str(entry.get("status", "")).lower()
-                if latest and entry_status in {"running", "pending", "spawning"}:
-                    return latest
-
+                # Merge running file entries too: the spawn status file can carry
+                # authoritative timeout metadata before terminal results arrive.
                 baseline = latest or by_id.get(subagent_id)
                 merged = _build_subagent_display_data(entry, baseline)
                 by_id[subagent_id] = merged

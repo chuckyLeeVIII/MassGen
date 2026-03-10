@@ -129,6 +129,7 @@ Organize supporting material into purpose-driven subdirectories:
 - `research/` — domain analysis, user research, competitive analysis, prior art
 - `design/` — system design notes, data models, API contracts, integration points
 - `decisions/` — architectural decision records (ADRs), trade-off analyses
+- `requirements/` — user stories, acceptance criteria, persona descriptions
 
 These support the spec but are NOT the spec — `project_spec.json` is always
 the source of truth.

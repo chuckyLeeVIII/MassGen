@@ -107,6 +107,7 @@ Organize supporting material into purpose-driven subdirectories:
 - `research/` — background research, prior art, feasibility analysis, codebase exploration notes
 - `framework/` — architecture decisions, technology choices with rationale, design patterns selected
 - `risks/` — risk register, mitigation strategies, dependency analysis
+- `requirements/` — user stories, acceptance criteria, requirements docs
 
 These support the plan but are NOT the plan — `project_plan.json` is always
 the source of truth.

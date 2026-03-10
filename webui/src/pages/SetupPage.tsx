@@ -891,6 +891,9 @@ export function SetupPage() {
   const saveApiKeys = useSetupStore((s) => s.saveApiKeys);
   const apiKeyInputs = useSetupStore(selectApiKeyInputs);
   const savingApiKeys = useSetupStore(selectSavingApiKeys);
+  const temporaryMode = new URLSearchParams(window.location.search).get('temporary') === '1';
+  const [temporaryCancelPending, setTemporaryCancelPending] = useState(false);
+  const [temporaryCancelMessage, setTemporaryCancelMessage] = useState<string | null>(null);
 
   // Theme
   const getEffectiveTheme = useThemeStore((s) => s.getEffectiveTheme);
@@ -923,7 +926,29 @@ export function SetupPage() {
 
   const handleFinish = () => {
     // Navigate to main app and auto-open quickstart wizard
-    window.location.href = '/?wizard=open';
+    window.location.href = temporaryMode ? '/?wizard=open&temporary=1' : '/?wizard=open';
+  };
+
+  const handleTemporaryCancel = async () => {
+    setTemporaryCancelPending(true);
+    setTemporaryCancelMessage(null);
+
+    try {
+      const response = await fetch('/api/quickstart/cancel', { method: 'POST' });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to cancel temporary quickstart session');
+      }
+
+      setTemporaryCancelMessage('Setup cancelled. You can close this tab.');
+      window.close();
+    } catch (err) {
+      setTemporaryCancelMessage(
+        err instanceof Error ? err.message : 'Temporary quickstart cancellation failed',
+      );
+    } finally {
+      setTemporaryCancelPending(false);
+    }
   };
 
   return (
@@ -936,14 +961,33 @@ export function SetupPage() {
               MassGen Setup
             </h1>
           </div>
-          <a
-            href="/"
-            className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 flex items-center gap-1 text-sm"
-          >
-            Skip to App <ExternalLink className="w-3 h-3" />
-          </a>
+          {temporaryMode ? (
+            <button
+              type="button"
+              onClick={handleTemporaryCancel}
+              disabled={temporaryCancelPending}
+              className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 flex items-center gap-1 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {temporaryCancelPending ? 'Cancelling...' : 'Cancel Setup'}
+            </button>
+          ) : (
+            <a
+              href="/"
+              className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 flex items-center gap-1 text-sm"
+            >
+              Skip to App <ExternalLink className="w-3 h-3" />
+            </a>
+          )}
         </div>
       </header>
+
+      {temporaryCancelMessage && (
+        <div className="px-6 pt-4">
+          <div className="max-w-4xl mx-auto rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+            {temporaryCancelMessage}
+          </div>
+        </div>
+      )}
 
       {/* Progress Steps */}
       <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4">

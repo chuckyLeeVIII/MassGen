@@ -2,8 +2,12 @@
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
+
+import yaml
 
 from massgen.frontend.displays.textual_widgets.quickstart_wizard import (
+    CoordinationModeStep,
     ProviderModelStep,
     QuickstartWizard,
     TabbedProviderModelStep,
@@ -58,6 +62,49 @@ def test_provider_model_step_still_skipped_for_multi_agent_different_mode():
     assert provider_step.skip_condition is not None
     should_skip = provider_step.skip_condition({"agent_count": 3, "setup_mode": "different"})
     assert should_skip is True
+
+
+def test_quickstart_wizard_no_longer_includes_context_path_step():
+    """Quickstart should not reserve a dedicated context-path step."""
+    wizard = QuickstartWizard()
+
+    step_ids = [step.id for step in wizard.get_steps()]
+
+    assert "context_path" not in step_ids
+
+
+def test_coordination_mode_step_decomposition_uses_hidden_checklist_defaults():
+    """Decomposition UI should return presenter/caps only and let builder defaults handle novelty/checklist tuning."""
+    step = CoordinationModeStep(WizardState())
+    step._selected_mode = "decomposition"
+    step._presenter_select = SimpleNamespace(value="agent_b")
+    step._per_agent_input = SimpleNamespace(value="3")
+    step._global_input = SimpleNamespace(value="9")
+    step._novelty_select = SimpleNamespace(value="strict")
+
+    value = step.get_value()
+
+    assert value == {
+        "coordination_mode": "decomposition",
+        "presenter_agent": "agent_b",
+        "max_new_answers_per_agent": 3,
+        "max_new_answers_global": 9,
+    }
+    assert "answer_novelty_requirement" not in value
+
+
+def test_quickstart_wizard_ignores_stale_context_path_state(monkeypatch, tmp_path):
+    """Quickstart output should not wire a saved context path into the generated config anymore."""
+    monkeypatch.chdir(tmp_path)
+    wizard = QuickstartWizard(config_filename="contextless")
+    _seed_minimal_state(wizard)
+    wizard.state.set("context_path", str(tmp_path / "legacy_context"))
+
+    result = asyncio.run(wizard.on_wizard_complete())
+
+    saved_config = Path(result["config_path"])
+    payload = yaml.safe_load(saved_config.read_text(encoding="utf-8"))
+    assert payload["orchestrator"]["context_paths"] == []
 
 
 def test_provider_model_reasoning_defaults_to_opus_high_even_if_stale_medium():

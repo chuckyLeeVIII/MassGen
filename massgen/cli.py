@@ -302,7 +302,10 @@ def _print_backends_table() -> None:
         "Use with: massgen --quickstart --headless" " --config-backend <type> --config-model <model>",
     )
     print(
-        "Multi-backend: massgen --quickstart --headless" " --config-backend claude,openai,gemini" " --config-model claude-opus-4-6,gpt-5.4,gemini-3-flash-preview",
+        "Mixed providers: massgen --quickstart --headless"
+        " --quickstart-agent backend=claude,model=claude-opus-4-6"
+        " --quickstart-agent backend=openai,model=gpt-5.4"
+        " --quickstart-agent backend=gemini,model=gemini-3-flash-preview",
     )
     print()
 
@@ -317,6 +320,39 @@ def _quickstart_filename_from_config_arg(config_path_arg: str | None) -> str | N
         return None
 
     return normalize_quickstart_config_filename(value)
+
+
+def _parse_quickstart_agent_specs(values: list[str] | None) -> list[dict[str, str | None]]:
+    """Parse repeated --quickstart-agent values into explicit agent specs."""
+    specs: list[dict[str, str | None]] = []
+    if not values:
+        return specs
+
+    allowed_keys = {"id", "backend", "type", "model", "reasoning_effort"}
+    for raw_value in values:
+        spec: dict[str, str | None] = {}
+        for item in raw_value.split(","):
+            key, sep, value = item.partition("=")
+            key = key.strip()
+            value = value.strip()
+            if not sep or not key or not value:
+                raise ValueError(
+                    "Each --quickstart-agent value must use key=value pairs, " "for example backend=claude,model=claude-opus-4-6",
+                )
+            if key not in allowed_keys:
+                allowed = ", ".join(sorted(allowed_keys))
+                raise ValueError(
+                    f"Unsupported --quickstart-agent field '{key}'. " f"Allowed fields: {allowed}",
+                )
+            spec[key] = value
+
+        if not (spec.get("backend") or spec.get("type")):
+            raise ValueError(
+                "Each --quickstart-agent requires backend=<type>.",
+            )
+        specs.append(spec)
+
+    return specs
 
 
 def _setup_logfire_observability() -> bool:
@@ -3120,6 +3156,22 @@ def validate_mode_flag_combinations(args: argparse.Namespace) -> list[str]:
         errors.append(
             "--personas requires parallel coordination mode, not decomposition.",
         )
+
+    if getattr(args, "web_quickstart", False) and getattr(args, "web", False):
+        errors.append(
+            "--web-quickstart already launches a dedicated browser setup flow; do not combine it with --web.",
+        )
+
+    quickstart_agents = getattr(args, "quickstart_agents", None)
+    if quickstart_agents:
+        if not getattr(args, "quickstart", False) or not getattr(args, "headless", False):
+            errors.append(
+                "--quickstart-agent requires --quickstart --headless.",
+            )
+        if getattr(args, "config_backend", None) or getattr(args, "config_model", None) or getattr(args, "config_agents", None) is not None:
+            errors.append(
+                "--quickstart-agent cannot be combined with --config-backend, --config-model, or --config-agents.",
+            )
 
     return errors
 
@@ -10524,6 +10576,11 @@ Environment Variables:
         help="Launch web UI server for real-time visualization",
     )
     parser.add_argument(
+        "--web-quickstart",
+        action="store_true",
+        help="Launch a temporary browser-based setup + quickstart flow that exits automatically when complete",
+    )
+    parser.add_argument(
         "--web-port",
         type=int,
         default=8000,
@@ -10668,7 +10725,7 @@ Environment Variables:
     parser.add_argument(
         "--config-agents",
         type=int,
-        default=2,
+        default=None,
         help="Number of agents for --generate-config (default: 2)",
     )
     parser.add_argument(
@@ -10690,6 +10747,12 @@ Environment Variables:
         "--config-context-path",
         type=str,
         help="Add context path to generated config",
+    )
+    parser.add_argument(
+        "--quickstart-agent",
+        action="append",
+        dest="quickstart_agents",
+        help="Explicit headless quickstart agent spec. Repeat for mixed providers, e.g. " "--quickstart-agent backend=claude,model=claude-opus-4-6",
     )
     parser.add_argument(
         "--setup",
@@ -11210,6 +11273,40 @@ def _cli_main_continued(args):
         server.serve()
         return
 
+    if args.web_quickstart:
+        try:
+            from .frontend.web.server import run_temporary_quickstart_server
+
+            print(f"{BRIGHT_CYAN}🌐 Starting MassGen Web Quickstart...{RESET}")
+            print(
+                f"{BRIGHT_GREEN}   Server: http://{args.web_host}:{args.web_port}/setup?temporary=1{RESET}",
+            )
+            print(
+                f"{BRIGHT_YELLOW}   This temporary setup session will close automatically when complete{RESET}\n",
+            )
+
+            session_result = run_temporary_quickstart_server(
+                host=args.web_host,
+                port=args.web_port,
+                no_browser=getattr(args, "no_browser", False),
+            )
+            if session_result.get("status") == "completed":
+                config_path = session_result.get("config_path")
+                if config_path:
+                    print(f"{BRIGHT_GREEN}✅ Configuration saved to: {config_path}{RESET}")
+                    print(
+                        f'{BRIGHT_CYAN}Run with: massgen --config {config_path} "Your question"{RESET}',
+                    )
+                return
+
+            print(f"{BRIGHT_YELLOW}⚠️  Web quickstart cancelled{RESET}")
+            sys.exit(1)
+        except ImportError as e:
+            print(f"{BRIGHT_RED}❌ Web UI dependencies not installed.{RESET}")
+            print(f"{BRIGHT_CYAN}   Run: pip install massgen{RESET}")
+            logger.debug(f"Import error: {e}")
+            sys.exit(1)
+
     # Launch web UI server if requested
     if args.web:
         try:
@@ -11317,7 +11414,7 @@ def _cli_main_continued(args):
             builder = ConfigBuilder()
             success = builder.generate_config_programmatic(
                 output_path=args.generate_config,
-                num_agents=args.config_agents,
+                num_agents=args.config_agents or 2,
                 backend_type=args.config_backend,
                 model=args.config_model,
                 use_docker=args.config_docker,
@@ -11350,6 +11447,9 @@ def _cli_main_continued(args):
             from massgen.config_builder import ConfigBuilder
 
             builder = ConfigBuilder()
+            quickstart_agent_specs = _parse_quickstart_agent_specs(
+                getattr(args, "quickstart_agents", None),
+            )
             headless_result = builder.run_quickstart_headless(
                 output_dir=".massgen",
                 num_agents=args.config_agents or 3,
@@ -11357,6 +11457,7 @@ def _cli_main_continued(args):
                 model_override=args.config_model,
                 use_docker=args.config_docker if args.config_docker else None,
                 context_path=args.config_context_path,
+                agent_specs=quickstart_agent_specs or None,
             )
 
             # Docker pull if available and headless

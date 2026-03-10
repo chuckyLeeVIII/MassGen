@@ -416,6 +416,7 @@ def get_default_config() -> str | None:
 def create_app(
     config_path: str | None = None,
     automation_mode: bool = False,
+    temporary_quickstart_session: dict[str, Any] | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application.
 
@@ -440,6 +441,7 @@ def create_app(
 
     # Store automation_mode in app state for WebSocket access
     app.state.automation_mode = automation_mode
+    app.state.temporary_quickstart_session = temporary_quickstart_session
 
     # CORS for development
     app.add_middleware(
@@ -589,13 +591,30 @@ def create_app(
     @app.get("/api/setup/status")
     async def get_setup_status():
         """Check if setup is needed (no config exists) and Docker availability."""
-        from pathlib import Path
-
+        from massgen.config_builder import (
+            DEFAULT_QUICKSTART_CONFIG_FILENAME,
+            build_quickstart_config_path,
+        )
         from massgen.utils.docker_diagnostics import diagnose_docker
 
-        # Check if default config exists
-        config_path = Path.home() / ".config" / "massgen" / "config.yaml"
-        has_config = config_path.exists()
+        project_config_path = build_quickstart_config_path(
+            location="project",
+            filename=DEFAULT_QUICKSTART_CONFIG_FILENAME,
+        )
+        global_config_path = build_quickstart_config_path(
+            location="global",
+            filename=DEFAULT_QUICKSTART_CONFIG_FILENAME,
+        )
+
+        if project_config_path.exists():
+            config_path = project_config_path
+            has_config = True
+        elif global_config_path.exists():
+            config_path = global_config_path
+            has_config = True
+        else:
+            config_path = project_config_path
+            has_config = False
 
         # Check Docker using diagnostics
         diagnostics = diagnose_docker()
@@ -622,13 +641,57 @@ def create_app(
         diagnostics = diagnose_docker()
         return diagnostics.to_dict()
 
+    @app.post("/api/quickstart/complete")
+    async def complete_quickstart(request_data: dict):
+        """Mark a temporary web quickstart session as completed."""
+        session = getattr(app.state, "temporary_quickstart_session", None)
+        if not session:
+            return JSONResponse(
+                {"error": "Temporary quickstart session is not active"},
+                status_code=404,
+            )
+
+        session["status"] = "completed"
+        session["config_path"] = request_data.get("config_path")
+        server = session.get("server")
+        if server is not None:
+            server.should_exit = True
+
+        return {
+            "success": True,
+            "status": session["status"],
+            "config_path": session["config_path"],
+        }
+
+    @app.post("/api/quickstart/cancel")
+    async def cancel_quickstart():
+        """Mark a temporary web quickstart session as cancelled."""
+        session = getattr(app.state, "temporary_quickstart_session", None)
+        if not session:
+            return JSONResponse(
+                {"error": "Temporary quickstart session is not active"},
+                status_code=404,
+            )
+
+        session["status"] = "cancelled"
+        session["config_path"] = None
+        server = session.get("server")
+        if server is not None:
+            server.should_exit = True
+
+        return {
+            "success": True,
+            "status": session["status"],
+            "config_path": session["config_path"],
+        }
+
     @app.get("/api/setup/env-status")
     async def get_env_status():
         """Check which .env files exist and their locations."""
-        from pathlib import Path
+        from massgen.config_builder import build_quickstart_env_path
 
-        home_env = Path.home() / ".massgen" / ".env"
-        local_env = Path.cwd() / ".env"
+        home_env = build_quickstart_env_path(location="global")
+        local_env = build_quickstart_env_path(location="project")
 
         return {
             "global_env": {
@@ -652,14 +715,15 @@ def create_app(
                 "OPENAI_API_KEY": "sk-...",
                 "ANTHROPIC_API_KEY": "sk-ant-..."
             },
-            "save_location": "global" | "local"
+            "save_location": "project" | "global"
         }
 
         Returns:
             {"success": true, "saved_to": "...", "saved_keys": ["OPENAI_API_KEY", ...]}
         """
         import os
-        from pathlib import Path
+
+        from massgen.config_builder import build_quickstart_env_path
 
         keys = request_data.get("keys", {})
         save_location = request_data.get("save_location", "global")
@@ -685,11 +749,10 @@ def create_app(
 
         # Determine save path
         if save_location == "global":
-            env_dir = Path.home() / ".massgen"
-            env_path = env_dir / ".env"
+            env_path = build_quickstart_env_path(location="global")
         else:
-            env_dir = Path.cwd()
-            env_path = env_dir / ".env"
+            env_path = build_quickstart_env_path(location="project")
+        env_dir = env_path.parent
 
         try:
             # Create directory if needed
@@ -1154,6 +1217,18 @@ def create_app(
             "all_capabilities": list(caps.supported_capabilities),
         }
 
+    @app.get("/api/quickstart/reasoning-profile")
+    async def get_quickstart_reasoning_profile(provider_id: str, model: str):
+        """Return the model-aware quickstart reasoning profile for Web quickstart parity."""
+        from massgen.config_builder import ConfigBuilder
+
+        return {
+            "profile": ConfigBuilder.get_quickstart_reasoning_profile(
+                provider_id,
+                model,
+            ),
+        }
+
     @app.post("/api/config/generate")
     async def generate_config(request_data: dict):
         """Generate a config YAML from wizard selections.
@@ -1211,6 +1286,7 @@ def create_app(
                     "id": agent_id,
                     "type": agent.get("provider", "openai"),
                     "model": agent.get("model", "gpt-4o"),
+                    **({"reasoning_effort": agent.get("reasoning_effort")} if agent.get("reasoning_effort") else {}),
                 },
             )
             # Collect per-agent tool settings
@@ -1264,9 +1340,10 @@ def create_app(
             {"success": true, "path": "..."}
         """
         import re
-        from pathlib import Path
 
         import yaml
+
+        from massgen.config_builder import build_quickstart_config_path
 
         config = request_data.get("config")
         yaml_content = request_data.get("yaml_content")
@@ -1279,6 +1356,7 @@ def create_app(
 
         # Get custom filename or use default
         filename = request_data.get("filename", "config.yaml")
+        save_location = request_data.get("save_location", "global")
         # Sanitize filename - only allow alphanumeric, underscore, dash, and .yaml extension
         if not re.match(r"^[\w\-]+\.ya?ml$", filename):
             # If invalid, sanitize it
@@ -1289,10 +1367,11 @@ def create_app(
             )
             filename = f"{base_name}.yaml"
 
-        # Save to user config location
-        config_dir = Path.home() / ".config" / "massgen"
-        config_dir.mkdir(parents=True, exist_ok=True)
-        config_path = config_dir / filename
+        config_path = build_quickstart_config_path(
+            location=save_location,
+            filename=filename,
+        )
+        config_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
             with open(config_path, "w", encoding="utf-8") as f:
@@ -5126,6 +5205,56 @@ def run_server(
             host=host,
             port=port,
         )
+
+
+def run_temporary_quickstart_server(
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    no_browser: bool = False,
+) -> dict[str, Any]:
+    """Run a temporary web server dedicated to setup + quickstart."""
+    try:
+        import uvicorn
+    except ImportError:
+        raise ImportError(
+            "uvicorn is not installed. Install with: pip install massgen",
+        )
+
+    session: dict[str, Any] = {
+        "mode": "temporary",
+        "status": "running",
+        "config_path": None,
+        "server": None,
+    }
+    app = create_app(
+        automation_mode=False,
+        temporary_quickstart_session=session,
+    )
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app,
+            host=host,
+            port=port,
+            log_level="warning",
+        ),
+    )
+    session["server"] = server
+
+    if not no_browser:
+        import threading
+        import time
+        import webbrowser
+
+        browser_url = f"http://{host}:{port}/setup?temporary=1"
+
+        def open_browser() -> None:
+            time.sleep(0.5)
+            webbrowser.open(browser_url)
+
+        threading.Thread(target=open_browser, daemon=True).start()
+
+    server.run()
+    return session
 
 
 # For running directly: python -m massgen.frontend.web.server

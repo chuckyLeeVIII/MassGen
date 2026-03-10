@@ -140,13 +140,13 @@ _CHECKLIST_ITEMS = [
     ),
 ]
 
-# Category tags for default checklist items: "must", "should", or "could"
+# Category tags for default checklist items — all "must" (no tier deprioritization).
 _CHECKLIST_ITEM_CATEGORIES = {
     "E1": "must",
     "E2": "must",
-    "E3": "should",
-    "E4": "could",
-    "E5": "should",  # quality/craft — always present
+    "E3": "must",
+    "E4": "must",
+    "E5": "must",
 }
 
 _CHECKLIST_ITEMS_CHANGEDOC = [
@@ -161,12 +161,12 @@ _CHECKLIST_ITEMS_CHANGEDOC = [
     ("The output shows care beyond correctness — thoughtful choices," " consistent style, attention to edge cases, or creative elements that" " distinguish it from adequate work."),
 ]
 
-# Category tags for changedoc checklist items
+# Category tags for changedoc checklist items — all "must" (no tier deprioritization).
 _CHECKLIST_ITEM_CATEGORIES_CHANGEDOC = {
     "E1": "must",
     "E2": "must",
-    "E3": "should",
-    "E4": "could",
+    "E3": "must",
+    "E4": "must",
 }
 
 

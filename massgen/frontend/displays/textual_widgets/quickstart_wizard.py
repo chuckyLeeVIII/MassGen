@@ -1233,8 +1233,6 @@ class CoordinationModeStep(StepComponent):
         self._per_agent_input: Input | None = None
         self._global_label: Label | None = None
         self._global_input: Input | None = None
-        self._novelty_label: Label | None = None
-        self._novelty_select: Select | None = None
 
     def _agent_ids(self) -> list[str]:
         agent_count = self.wizard_state.get("agent_count", 3)
@@ -1251,8 +1249,6 @@ class CoordinationModeStep(StepComponent):
             self._per_agent_input,
             self._global_label,
             self._global_input,
-            self._novelty_label,
-            self._novelty_select,
         ]:
             if widget is not None:
                 widget.display = visible
@@ -1276,7 +1272,7 @@ class CoordinationModeStep(StepComponent):
             self._option_list.highlighted = 0
 
         yield Label(
-            "Decomposition recommended defaults: per-agent 2 (recommended range 2-3), " "global cap = 3 x agents, novelty = balanced.",
+            "Decomposition recommended defaults: per-agent 2 (recommended range 2-3), " "global cap = 3 x agents, presenter = last agent.",
             classes="password-hint",
         )
 
@@ -1318,22 +1314,6 @@ class CoordinationModeStep(StepComponent):
         )
         yield self._global_input
 
-        self._novelty_label = Label(
-            "Answer novelty requirement:",
-            classes="text-input-label",
-        )
-        yield self._novelty_label
-        self._novelty_select = Select(
-            [
-                ("Lenient", "lenient"),
-                ("Balanced", "balanced"),
-                ("Strict", "strict"),
-            ],
-            value="balanced",
-            id="decomp_novelty_select",
-        )
-        yield self._novelty_select
-
         self._set_decomposition_visibility(False)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
@@ -1367,16 +1347,11 @@ class CoordinationModeStep(StepComponent):
             except ValueError:
                 pass
 
-        novelty = "balanced"
-        if self._novelty_select and self._novelty_select.value != Select.BLANK:
-            novelty = str(self._novelty_select.value)
-
         return {
             "coordination_mode": "decomposition",
             "presenter_agent": presenter_value,
             "max_new_answers_per_agent": max_per_agent,
             "max_new_answers_global": max_global,
-            "answer_novelty_requirement": novelty,
         }
 
     def set_value(self, value: Any) -> None:
@@ -1400,10 +1375,6 @@ class CoordinationModeStep(StepComponent):
             max_global = value.get("max_new_answers_global")
             if max_global and self._global_input:
                 self._global_input.value = str(max_global)
-
-            novelty = value.get("answer_novelty_requirement")
-            if novelty and self._novelty_select:
-                self._novelty_select.value = novelty
 
         self._set_decomposition_visibility(self._selected_mode == "decomposition")
 
@@ -1606,7 +1577,6 @@ class ConfigPreviewStep(StepComponent):
             agent_count = self.wizard_state.get("agent_count", 3)
             setup_mode = self.wizard_state.get("setup_mode", "same")
             use_docker = self.wizard_state.get("execution_mode", True)
-            context_path = self.wizard_state.get("context_path")
 
             # Build agents config
             agents_config = []
@@ -1641,11 +1611,6 @@ class ConfigPreviewStep(StepComponent):
                         agent_spec["reasoning_effort"] = agent_config.get("reasoning_effort")
                     agents_config.append(agent_spec)
 
-            # Build context paths
-            context_paths = None
-            if context_path:
-                context_paths = [{"path": context_path, "permission": "write"}]
-
             coordination_settings = self.wizard_state.get("coordination_mode_settings", {})
             if not isinstance(coordination_settings, dict):
                 coordination_settings = {}
@@ -1653,7 +1618,6 @@ class ConfigPreviewStep(StepComponent):
             # Generate config
             config = builder._generate_quickstart_config(
                 agents_config=agents_config,
-                context_paths=context_paths,
                 use_docker=use_docker,
                 coordination_settings=coordination_settings,
             )
@@ -1759,11 +1723,10 @@ class QuickstartWizard(WizardModal):
     5. Execution mode
     6. Docker setup - skipped if local mode selected
     7. Skills setup - select packages and install in-step (skipped if local mode selected)
-    8. Context path
-    9. Coordination mode (multi-agent only)
-    10. Preview
-    11. Launch options
-    12. Complete
+    8. Coordination mode (multi-agent only)
+    9. Preview
+    10. Launch options
+    11. Complete
     """
 
     def __init__(
@@ -1834,12 +1797,6 @@ class QuickstartWizard(WizardModal):
                 description="Install quickstart skill packages now?",
                 component_class=SkillsInstallStep,
                 skip_condition=lambda state: not state.get("execution_mode", True),
-            ),
-            WizardStep(
-                id="context_path",
-                title="Context Path",
-                description="Optional workspace directory",
-                component_class=ContextPathStep,
             ),
             WizardStep(
                 id="coordination_mode_settings",
@@ -1963,7 +1920,6 @@ class QuickstartWizard(WizardModal):
             elif isinstance(skills_step_data, bool):
                 # Backward compatibility: older bool step data means defer to CLI installer.
                 install_skills_now = skills_step_data
-            context_path = self.state.get("context_path")
             launch_option = self.state.get("launch_options", "terminal")
 
             # Build agents config
@@ -2005,11 +1961,6 @@ class QuickstartWizard(WizardModal):
                         agent_spec["reasoning_effort"] = agent_config.get("reasoning_effort")
                     agents_config.append(agent_spec)
 
-            # Build context paths
-            context_paths = None
-            if context_path:
-                context_paths = [{"path": context_path, "permission": "write"}]
-
             coordination_settings = self.state.get("coordination_mode_settings", {})
             if not isinstance(coordination_settings, dict):
                 coordination_settings = {}
@@ -2017,7 +1968,6 @@ class QuickstartWizard(WizardModal):
             # Generate config
             config = builder._generate_quickstart_config(
                 agents_config=agents_config,
-                context_paths=context_paths,
                 use_docker=use_docker,
                 coordination_settings=coordination_settings,
             )

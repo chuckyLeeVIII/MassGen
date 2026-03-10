@@ -136,6 +136,35 @@ def build_quickstart_config_path(
     return base_dir / normalized_filename
 
 
+def build_quickstart_env_path(
+    *,
+    location: str = "project",
+    project_dir: Path | None = None,
+    home_dir: Path | None = None,
+) -> Path:
+    """Build a quickstart env path from location."""
+    if location == "global":
+        return (home_dir or Path.home()) / ".massgen" / ".env"
+
+    return (project_dir or Path.cwd()) / ".env"
+
+
+def resolve_headless_quickstart_project_dir(
+    output_dir: str | Path,
+    *,
+    cwd: Path | None = None,
+) -> Path:
+    """Resolve the project dir used for local headless quickstart env files."""
+    resolved_output_dir = Path(output_dir)
+    if resolved_output_dir.name == ".massgen":
+        parent = resolved_output_dir.parent
+        if str(parent) in {"", "."}:
+            return cwd or Path.cwd()
+        return parent
+
+    return resolved_output_dir
+
+
 # Load environment variables
 load_dotenv()
 
@@ -4098,7 +4127,7 @@ class ConfigBuilder:
 
     def _create_env_template(
         self,
-        output_path: str,
+        output_path: str | Path,
         api_keys: dict[str, bool],
     ) -> str | None:
         """Create a .env template with empty key placeholders.
@@ -4106,13 +4135,14 @@ class ConfigBuilder:
         Only creates if file doesn't already exist (idempotent).
 
         Args:
-            output_path: Directory to create .env in
+            output_path: Directory or file path for the .env template
             api_keys: Dict of {provider_id: bool} from detect_api_keys()
 
         Returns:
             Path to created template, or None if skipped (file exists)
         """
-        env_file = Path(output_path) / ".env"
+        env_target = Path(output_path)
+        env_file = env_target if env_target.name == ".env" else env_target / ".env"
         if env_file.exists():
             return None
 
@@ -4160,29 +4190,21 @@ class ConfigBuilder:
         model_override: str | None = None,
         use_docker: bool | None = None,
         context_path: str | None = None,
+        agent_specs: list[dict[str, str | None]] | None = None,
     ) -> dict:
         """Run quickstart non-interactively with auto-detection.
 
         Auto-detects API keys, selects the best backend/model, generates
         config, and reports results. Designed for programmatic use by AI agents.
 
-        Supports multi-backend configs via comma-separated values:
-          --config-backend claude,openai,gemini
-          --config-model claude-opus-4-6,gpt-5.4,gemini-3-flash-preview
-
-        When multiple backends are provided, each backend gets one agent
-        (num_agents is ignored). When models list is shorter than backends,
-        defaults are used for remaining backends.
-
         Args:
             output_dir: Directory for config and .env files
             num_agents: Number of agents (default 3)
-            backend_override: Force specific backend(s), comma-separated
-                for multi-backend (e.g., "claude,openai,gemini")
-            model_override: Force specific model(s), comma-separated to
-                match backends (e.g., "claude-opus-4-6,gpt-5.4")
+            backend_override: Force specific backend for all agents
+            model_override: Force specific model for all agents
             use_docker: True/False to force, None to auto-detect
             context_path: Optional path to add as context
+            agent_specs: Optional explicit per-agent backend/model specs
 
         Returns:
             Dict with keys: success, config_path, env_template_path, backend,
@@ -4205,6 +4227,12 @@ class ConfigBuilder:
             "messages": [],
             "manual_steps": [],
         }
+        project_dir = resolve_headless_quickstart_project_dir(output_dir)
+        env_template_path = build_quickstart_env_path(
+            location="project",
+            project_dir=project_dir,
+        )
+        env_template_display = str(env_template_path)
 
         # Step 1: Detect API keys
         api_keys = self.detect_api_keys()
@@ -4214,68 +4242,72 @@ class ConfigBuilder:
             if env_var:
                 result["api_keys_summary"][env_var] = api_keys.get(provider_id, False)
 
-        # Step 2: Select backend(s) and model(s)
-        # Parse comma-separated values for multi-backend support
-        backends_list = [b.strip() for b in backend_override.split(",") if b.strip()] if backend_override and "," in backend_override else None
-        # Parse models: comma-separated list, OR single value as [value]
-        if model_override and "," in model_override:
-            models_list = [m.strip() for m in model_override.split(",") if m.strip()]
-        elif model_override and backends_list:
-            # Single model with multi-backend: apply to first backend
-            models_list = [model_override.strip()]
-        else:
-            models_list = None
+        if (backend_override and "," in backend_override) or (model_override and "," in model_override):
+            result["manual_steps"].append(
+                "CSV multi-backend quickstart has been replaced. " "Use repeated --quickstart-agent backend=<type>,model=<model> instead.",
+            )
+            return result
 
-        multi_backend = backends_list is not None and len(backends_list) > 1
-
-        if multi_backend:
-            # Multi-backend mode: each backend gets one agent
-            # Resolve models for each backend
-            resolved_models: list[str] = []
+        resolved_agent_specs: list[dict[str, str | None]] = []
+        if agent_specs:
             missing_keys: list[str] = []
-            for i, b in enumerate(backends_list):
-                # Check API key
-                if not api_keys.get(b, False):
-                    missing_keys.append(b)
+            for index, raw_spec in enumerate(agent_specs):
+                backend = str(raw_spec.get("backend") or raw_spec.get("type") or "").strip()
+                if not backend:
+                    result["manual_steps"].append(
+                        "Each quickstart agent spec requires a backend.",
+                    )
+                    return result
+
+                if not api_keys.get(backend, False):
+                    missing_keys.append(backend)
                     continue
-                # Resolve model
-                if models_list and i < len(models_list):
-                    resolved_models.append(models_list[i])
-                else:
-                    # Use default model for this backend
-                    m = self._resolve_default_model(b)
-                    resolved_models.append(m)
+
+                provider_info = self.PROVIDERS.get(backend, {})
+                model = str(raw_spec.get("model") or "").strip() or self._resolve_default_model(backend)
+                if not model:
+                    result["manual_steps"].append(
+                        f"Backend '{backend}' requires an explicit model.",
+                    )
+                    return result
+
+                resolved_agent_specs.append(
+                    {
+                        "id": str(raw_spec.get("id") or f"agent_{chr(ord('a') + index)}"),
+                        "type": str(provider_info.get("type", backend)),
+                        "model": model,
+                        "reasoning_effort": raw_spec.get("reasoning_effort"),
+                    },
+                )
 
             if missing_keys:
                 result["env_template_path"] = self._create_env_template(
-                    output_dir,
+                    env_template_path,
                     api_keys,
                 )
                 result["manual_steps"].append(
-                    f"Backend(s) {', '.join(missing_keys)} require API keys. " f"Fill in {output_dir}/.env, then re-run.",
+                    f"Backend(s) {', '.join(missing_keys)} require API keys. " f"Fill in {env_template_display}, then re-run.",
                 )
                 return result
 
-            # Filter out backends that had missing keys (already returned above)
-            result["backends"] = backends_list
-            result["models"] = resolved_models
-            # Set single-value fields to first for backward compat
-            result["backend"] = backends_list[0]
-            result["model"] = resolved_models[0]
+            result["backends"] = [str(spec["type"]) for spec in resolved_agent_specs]
+            result["models"] = [str(spec["model"]) for spec in resolved_agent_specs]
+            result["backend"] = result["backends"][0] if result["backends"] else None
+            result["model"] = result["models"][0] if result["models"] else None
         else:
             # Single-backend mode (original behavior)
-            backend = backends_list[0] if backends_list else backend_override
-            model = models_list[0] if models_list else model_override
+            backend = backend_override
+            model = model_override
 
             if backend:
                 # Validate override has available key
                 if not api_keys.get(backend, False):
                     result["env_template_path"] = self._create_env_template(
-                        output_dir,
+                        env_template_path,
                         api_keys,
                     )
                     result["manual_steps"].append(
-                        f"Backend '{backend}' requires an API key. " f"Fill in {output_dir}/.env, then re-run.",
+                        f"Backend '{backend}' requires an API key. Fill in {env_template_display}, then re-run.",
                     )
                     return result
                 if not model:
@@ -4290,11 +4322,11 @@ class ConfigBuilder:
 
             if not backend or not model:
                 result["env_template_path"] = self._create_env_template(
-                    output_dir,
+                    env_template_path,
                     api_keys,
                 )
                 result["manual_steps"].append(
-                    f"No API keys found. Fill in {output_dir}/.env, then re-run " "massgen --quickstart --headless",
+                    f"No API keys found. Fill in {env_template_display}, then re-run " "massgen --quickstart --headless",
                 )
                 return result
 
@@ -4332,20 +4364,9 @@ class ConfigBuilder:
         # Step 4: Generate config
         config_path = str(Path(output_dir) / "config.yaml")
         try:
-            if multi_backend:
-                # Multi-backend: build agents_config directly
-                agents_config = []
-                for i, (b, m) in enumerate(zip(backends_list, resolved_models)):
-                    provider_info = self.PROVIDERS.get(b, {})
-                    agents_config.append(
-                        {
-                            "id": f"{b.split('.')[-1]}-{m.split('-')[-1]}{i + 1}",
-                            "type": provider_info.get("type", b),
-                            "model": m,
-                        },
-                    )
+            if resolved_agent_specs:
                 config = self._generate_quickstart_config(
-                    agents_config,
+                    resolved_agent_specs,
                     context_path=context_path,
                     use_docker=use_docker,
                 )
@@ -4876,33 +4897,7 @@ class ConfigBuilder:
                                 agent_tools[agent_id] = {}
                             agent_tools[agent_id]["enable_code_execution"] = True
 
-            # Step 4: Ask about context path (to avoid runtime prompt)
-            console.print("\n[bold cyan]Context Path[/bold cyan]")
-            console.print(
-                "[dim]Context paths give agents read/write access to your project files.[/dim]",
-            )
-            console.print(
-                "[dim]Without one, agents can only work in their isolated workspaces.[/dim]\n",
-            )
-            cwd = str(Path.cwd())
-            console.print(f"[dim]Current directory: {cwd}[/dim]")
-
-            add_context = questionary.confirm(
-                "Add current directory as context path?",
-                default=True,
-                style=questionary.Style(
-                    [
-                        ("question", "fg:cyan bold"),
-                    ],
-                ),
-            ).ask()
-
-            if add_context is None:
-                raise KeyboardInterrupt
-
-            context_path = cwd if add_context else None
-
-            # Step 5: Coordination settings (only for multi-agent)
+            # Step 4: Coordination settings (only for multi-agent)
             if num_agents > 1:
                 console.print("\n[bold cyan]Coordination Mode[/bold cyan]")
                 console.print(
@@ -4960,260 +4955,13 @@ class ConfigBuilder:
 
                     coordination_settings["presenter_agent"] = presenter_agent
 
-                    # Recommended decomposition defaults:
-                    # - lower per-agent consecutive cap (2-3)
-                    # - cumulative global cap for deterministic team budget
-                    coordination_settings["max_new_answers_per_agent"] = 2
-                    coordination_settings["max_new_answers_global"] = max(3, num_agents * 3)
-                    coordination_settings["answer_novelty_requirement"] = "balanced"
-
                     console.print(
                         "\n[dim]Using recommended decomposition defaults:[/dim]",
                     )
-                    console.print(
-                        f"[dim]- max_new_answers_per_agent: {coordination_settings['max_new_answers_per_agent']} (recommended 2-3)[/dim]",
-                    )
-                    console.print(
-                        f"[dim]- max_new_answers_global: {coordination_settings['max_new_answers_global']} (team-wide cumulative)[/dim]",
-                    )
-                    console.print(
-                        f"[dim]- answer_novelty_requirement: {coordination_settings['answer_novelty_requirement']}[/dim]",
-                    )
-
-                # Subagents section (separate from coordination tuning)
-                console.print("\n[bold cyan]Subagents[/bold cyan]")
-                console.print(
-                    "[dim]Subagents allow agents to spawn parallel child processes for independent tasks.[/dim]",
-                )
-                enable_subagents = questionary.confirm(
-                    "Enable subagents?",
-                    default=False,
-                    style=questionary.Style([("question", "fg:cyan bold")]),
-                ).ask()
-
-                if enable_subagents is None:
-                    raise KeyboardInterrupt
-
-                if enable_subagents:
-                    coordination_settings["enable_subagents"] = True
-
-                    # Ask for subagent model configuration
-                    console.print(
-                        "\n[dim]Subagents can use the same model as parent agents or different ones.[/dim]",
-                    )
-                    subagent_model_choice = questionary.select(
-                        "Subagent model:",
-                        choices=[
-                            questionary.Choice("Same as parent agents", value="inherit"),
-                            questionary.Choice("Inherit spawning parent agent exactly (single-agent)", value="inherit_spawning_parent"),
-                            questionary.Choice("Choose different model(s)", value="custom"),
-                        ],
-                        default="inherit",
-                        style=questionary.Style([("question", "fg:cyan bold")]),
-                    ).ask()
-
-                    if subagent_model_choice is None:
-                        raise KeyboardInterrupt
-
-                    if subagent_model_choice == "inherit_spawning_parent":
-                        coordination_settings["subagent_orchestrator"] = {
-                            "enabled": True,
-                            "inherit_spawning_agent_backend": True,
-                        }
-                        console.print(
-                            "\n  [dim]Subagents will inherit the exact backend/model from the spawning parent agent.[/dim]",
-                        )
-
-                    elif subagent_model_choice == "custom":
-                        # Support multiple subagent backends
-                        subagent_agents = []
-
-                        while True:
-                            agent_num = len(subagent_agents) + 1
-                            console.print(f"\n[bold cyan]Subagent Backend {agent_num}[/bold cyan]")
-
-                            # Only show providers with API keys
-                            provider_choices = [
-                                questionary.Choice(
-                                    self.PROVIDERS.get(pid, {}).get("name", pid),
-                                    value=pid,
-                                )
-                                for pid in available_providers
-                            ]
-
-                            subagent_provider = questionary.select(
-                                "  Backend:",
-                                choices=provider_choices,
-                                style=questionary.Style(
-                                    [
-                                        ("selected", "fg:cyan bold"),
-                                        ("pointer", "fg:cyan bold"),
-                                        ("highlighted", "fg:cyan"),
-                                    ],
-                                ),
-                                use_arrow_keys=True,
-                            ).ask()
-
-                            if subagent_provider is None:
-                                raise KeyboardInterrupt
-
-                            # Select model for subagents
-                            subagent_provider_info = self.PROVIDERS.get(subagent_provider, {})
-                            subagent_models = subagent_provider_info.get("models", ["default"])
-                            subagent_default_model = subagent_provider_info.get(
-                                "default_model",
-                                subagent_models[0] if subagent_models else None,
-                            )
-
-                            subagent_model = self.select_model_smart(
-                                subagent_provider,
-                                subagent_models,
-                                current_model=subagent_default_model,
-                                prompt="  Model:",
-                            )
-
-                            if subagent_model is None:
-                                raise KeyboardInterrupt
-
-                            # Build this subagent config
-                            subagent_config = {
-                                "backend": {
-                                    "type": subagent_provider_info.get("type", subagent_provider),
-                                    "model": subagent_model,
-                                },
-                            }
-
-                            # Add base_url for providers that need it
-                            if subagent_provider_info.get("base_url"):
-                                subagent_config["backend"]["base_url"] = subagent_provider_info["base_url"]
-
-                            subagent_agents.append(subagent_config)
-                            console.print(f"  [green]✓ Added: {subagent_model}[/green]")
-
-                            # Ask if they want to add another
-                            add_another = questionary.confirm(
-                                "Add another subagent backend?",
-                                default=False,
-                                style=questionary.Style([("question", "fg:cyan bold")]),
-                            ).ask()
-
-                            if add_another is None:
-                                raise KeyboardInterrupt
-
-                            if not add_another:
-                                break
-
-                        # Store all subagent configs
-                        coordination_settings["subagent_orchestrator"] = {
-                            "enabled": True,
-                            "agents": subagent_agents,
-                        }
-
-                        if len(subagent_agents) > 1:
-                            console.print(f"\n  [dim]Configured {len(subagent_agents)} subagent backends[/dim]")
-
-                # Coordination tuning section (optional, hidden by default)
-                console.print("\n[bold cyan]Coordination Tuning[/bold cyan]")
-                if coordination_mode == "decomposition":
-                    console.print(
-                        "[dim]Fine-tune decomposition defaults (presenter mode, novelty, and answer caps).[/dim]",
-                    )
-                    console.print(
-                        "[dim]Recommended decomposition defaults are already set and usually need no changes.[/dim]",
-                    )
-                else:
-                    console.print(
-                        "[dim]Fine-tune voting sensitivity, answer novelty, and limits.[/dim]",
-                    )
-                    console.print("[dim]Default settings (lenient) work well for most tasks.[/dim]")
-
-                customize_coordination = questionary.confirm(
-                    "Customize coordination settings?",
-                    default=False,
-                    style=questionary.Style([("question", "fg:cyan bold")]),
-                ).ask()
-
-                if customize_coordination is None:
-                    raise KeyboardInterrupt
-
-                if customize_coordination:
-                    # Voting sensitivity (still relevant for voting-style coordination phases)
-                    voting_choices = [
-                        questionary.Choice(
-                            "Lenient - Agents accept answers more easily",
-                            value="lenient",
-                        ),
-                        questionary.Choice(
-                            "Balanced - Moderate scrutiny of answers",
-                            value="balanced",
-                        ),
-                        questionary.Choice(
-                            "Strict - Agents are highly critical",
-                            value="strict",
-                        ),
-                    ]
-
-                    voting_default = "lenient"
-                    voting_sensitivity = questionary.select(
-                        "Voting Sensitivity:",
-                        choices=voting_choices,
-                        default=voting_default,
-                        style=questionary.Style(
-                            [
-                                ("selected", "fg:cyan bold"),
-                                ("pointer", "fg:cyan bold"),
-                                ("highlighted", "fg:cyan"),
-                            ],
-                        ),
-                        use_arrow_keys=True,
-                    ).ask()
-
-                    if voting_sensitivity is None:
-                        raise KeyboardInterrupt
-
-                    coordination_settings["voting_sensitivity"] = voting_sensitivity
-
-                    # Answer novelty requirement
-                    novelty_choices = [
-                        questionary.Choice(
-                            "Lenient - Similar answers are accepted",
-                            value="lenient",
-                        ),
-                        questionary.Choice(
-                            "Balanced - Some differentiation required",
-                            value="balanced",
-                        ),
-                        questionary.Choice(
-                            "Strict - Answers must be substantially different",
-                            value="strict",
-                        ),
-                    ]
-
-                    novelty_default = coordination_settings.get("answer_novelty_requirement", "lenient")
-                    answer_novelty = questionary.select(
-                        "Answer Novelty Requirement:",
-                        choices=novelty_choices,
-                        default=novelty_default,
-                        style=questionary.Style(
-                            [
-                                ("selected", "fg:cyan bold"),
-                                ("pointer", "fg:cyan bold"),
-                                ("highlighted", "fg:cyan"),
-                            ],
-                        ),
-                        use_arrow_keys=True,
-                    ).ask()
-
-                    if answer_novelty is None:
-                        raise KeyboardInterrupt
-
-                    coordination_settings["answer_novelty_requirement"] = answer_novelty
-
-                    # Max answers per agent
-                    max_answers_default = coordination_settings.get("max_new_answers_per_agent")
+                    default_max_answers = 2
                     max_answers_input = questionary.text(
-                        "Max answers per agent (leave empty for unlimited):",
-                        default=str(max_answers_default) if max_answers_default else "",
+                        "Max answers per agent:",
+                        default=str(default_max_answers),
                         style=questionary.Style(
                             [
                                 ("question", "fg:cyan bold"),
@@ -5224,91 +4972,44 @@ class ConfigBuilder:
                     if max_answers_input is None:
                         raise KeyboardInterrupt
 
-                    if max_answers_input.strip():
-                        try:
-                            max_answers = int(max_answers_input)
-                            if max_answers > 0:
-                                coordination_settings["max_new_answers_per_agent"] = max_answers
-                        except ValueError:
-                            pass  # Ignore invalid input, use unlimited
+                    try:
+                        max_answers = int(max_answers_input.strip() or str(default_max_answers))
+                    except ValueError:
+                        max_answers = default_max_answers
+                    coordination_settings["max_new_answers_per_agent"] = max(1, max_answers)
 
-                    if coordination_mode == "decomposition":
-                        # Team-wide cumulative cap gives deterministic upper bound
-                        max_global_default = coordination_settings.get(
-                            "max_new_answers_global",
-                            max(3, num_agents * 3),
-                        )
-                        max_global_input = questionary.text(
-                            "Max answers globally across all agents (leave empty for unlimited):",
-                            default=str(max_global_default) if max_global_default else "",
-                            style=questionary.Style(
-                                [
-                                    ("question", "fg:cyan bold"),
-                                ],
-                            ),
-                        ).ask()
-
-                        if max_global_input is None:
-                            raise KeyboardInterrupt
-
-                        if max_global_input.strip():
-                            try:
-                                max_global = int(max_global_input)
-                                if max_global > 0:
-                                    coordination_settings["max_new_answers_global"] = max_global
-                            except ValueError:
-                                pass  # Ignore invalid input, keep prior/default value
-
-                # Persona Generation (multi-agent only)
-                console.print("\n[bold cyan]Persona Generation[/bold cyan]")
-                console.print(
-                    "[dim]Auto-generate diverse approaches for each agent to explore " "different regions of the solution space.[/dim]\n",
-                )
-
-                enable_personas = questionary.confirm(
-                    "Enable automatic persona generation?",
-                    default=True,
-                    style=questionary.Style(
-                        [
-                            ("question", "fg:cyan bold"),
-                        ],
-                    ),
-                ).ask()
-
-                if enable_personas is None:
-                    raise KeyboardInterrupt
-
-                if enable_personas:
-                    # Ask for diversity mode
-                    diversity_mode = questionary.select(
-                        "Diversity mode:",
-                        choices=[
-                            questionary.Choice(
-                                "Perspective - Different values/priorities (e.g., simplicity vs robustness)",
-                                value="perspective",
-                            ),
-                            questionary.Choice(
-                                "Implementation - Different solution types (e.g., minimal vs feature-rich)",
-                                value="implementation",
-                            ),
-                        ],
-                        default="perspective",
+                    default_max_global = max(3, num_agents * 3)
+                    max_global_input = questionary.text(
+                        "Max answers globally across all agents:",
+                        default=str(default_max_global),
+                        style=questionary.Style(
+                            [
+                                ("question", "fg:cyan bold"),
+                            ],
+                        ),
                     ).ask()
 
-                    if diversity_mode is None:
+                    if max_global_input is None:
                         raise KeyboardInterrupt
 
-                    coordination_settings["persona_generator"] = {
-                        "enabled": True,
-                        "diversity_mode": diversity_mode,
-                    }
+                    try:
+                        max_global = int(max_global_input.strip() or str(default_max_global))
+                    except ValueError:
+                        max_global = default_max_global
+                    coordination_settings["max_new_answers_global"] = max(1, max_global)
 
-            # Step 6: Generate the full config
+                    console.print(
+                        f"[dim]- max_new_answers_per_agent: {coordination_settings['max_new_answers_per_agent']}[/dim]",
+                    )
+                    console.print(
+                        f"[dim]- max_new_answers_global: {coordination_settings['max_new_answers_global']}[/dim]",
+                    )
+
+            # Step 5: Generate the full config
             console.print("\n[dim]Generating configuration...[/dim]")
 
             config = self._generate_quickstart_config(
                 agents_config,
-                context_path=context_path,
                 use_docker=use_docker,
                 agent_tools=agent_tools,
                 agent_system_messages=agent_system_messages,
@@ -5413,9 +5114,8 @@ class ConfigBuilder:
                                   the custom system message strings
             coordination_settings: Shared coordination settings dict with keys like
                                   'coordination_mode', 'presenter_agent',
-                                  'voting_sensitivity', 'answer_novelty_requirement',
-                                  'max_new_answers_per_agent', 'max_new_answers_global',
-                                  and fairness controls
+                                  'voting_sensitivity', 'max_new_answers_per_agent',
+                                  'max_new_answers_global', and fairness controls
 
         Returns:
             Complete configuration dict
@@ -5558,7 +5258,7 @@ class ConfigBuilder:
                 },
             }
         else:
-            # Simplified orchestrator config for local mode (no skills)
+            # Local mode still enables built-in skills even without Docker.
             orchestrator_config = {
                 "snapshot_storage": "snapshots",
                 "agent_temporary_workspace": "temp_workspaces",
@@ -5578,6 +5278,8 @@ class ConfigBuilder:
                 "coordination": {
                     "max_orchestration_restarts": 0,  # Disabled pending MAS-268 fix
                     "learning_capture_mode": "verification_and_final_only",
+                    "use_skills": True,
+                    "skills_directory": ".agent/skills",
                     "enable_agent_task_planning": True,
                     "task_planning_filesystem_mode": True,
                     "enable_memory_filesystem_mode": True,
@@ -5609,8 +5311,6 @@ class ConfigBuilder:
         if coordination_mode == "decomposition":
             if "presenter_agent" not in orchestrator_config and agents:
                 orchestrator_config["presenter_agent"] = agents[-1]["id"]
-            if coordination_settings.get("answer_novelty_requirement") is None:
-                orchestrator_config["answer_novelty_requirement"] = "balanced"
             if coordination_settings.get("max_new_answers_per_agent") is None:
                 orchestrator_config["max_new_answers_per_agent"] = 2
             if coordination_settings.get("max_new_answers_global") is None:

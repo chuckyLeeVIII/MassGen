@@ -299,6 +299,110 @@ async def test_round_evaluator_pre_round_uses_codex_background_mcp_client(
 
 
 @pytest.mark.asyncio
+async def test_round_evaluator_large_payload_is_kept_inline_for_spawn_subagents(
+    mock_orchestrator,
+    monkeypatch,
+    tmp_path,
+):
+    """Large round-evaluator briefs should stay inline once spawn_subagents allows larger payloads."""
+    from massgen.subagent.models import SubagentResult
+
+    orchestrator = mock_orchestrator(num_agents=1)
+    agent_id = "agent_a"
+
+    orchestrator.current_task = "# TASK PLANNING MODE\n\n" + ("A" * 12050)
+    orchestrator.config.voting_sensitivity = "checklist_gated"
+    orchestrator.config.coordination_config.round_evaluator_before_checklist = True
+    orchestrator.config.coordination_config.orchestrator_managed_round_evaluator = True
+    orchestrator.config.coordination_config.enable_subagents = True
+    orchestrator.config.coordination_config.subagent_types = ["round_evaluator"]
+
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    temp_root = tmp_path / "temp"
+    temp_root.mkdir()
+    backend = orchestrator.agents[agent_id].backend
+    backend.filesystem_manager = SimpleNamespace(
+        get_workspace_root=lambda: str(workspace_root),
+        get_current_workspace=lambda: str(workspace_root),
+        agent_temporary_workspace=str(temp_root),
+        cwd=str(workspace_root),
+    )
+
+    orchestrator.agent_states[agent_id].answer = "draft answer v1"
+    orchestrator.coordination_tracker.add_agent_answer(
+        agent_id=agent_id,
+        answer="draft answer v1",
+    )
+
+    temp_snapshots = tmp_path / "temp-snapshots"
+    temp_snapshots.mkdir()
+    monkeypatch.setattr(
+        orchestrator,
+        "_copy_all_snapshots_to_temp_workspace",
+        AsyncMock(return_value=str(temp_snapshots)),
+    )
+    monkeypatch.setattr(orchestrator, "_emit_round_evaluator_spawn_event", lambda **_kw: None)
+    monkeypatch.setattr(orchestrator, "_queue_round_start_context_block", lambda *a, **_kw: None)
+
+    eval_workspace = tmp_path / "round-eval-workspace"
+    eval_workspace.mkdir()
+    (eval_workspace / "critique_packet.md").write_text(
+        "# Critique Packet\n\nLarge payload handled via file.",
+        encoding="utf-8",
+    )
+    (eval_workspace / "verdict.json").write_text(
+        json.dumps({"schema_version": "1", "verdict": "converged", "scores": {"E1": 5}}, indent=2),
+        encoding="utf-8",
+    )
+
+    captured_params: dict[str, object] = {}
+
+    async def fake_subagent_call(
+        parent_agent_id: str,
+        tool_name: str,
+        params: dict[str, object],
+    ):
+        assert parent_agent_id == agent_id
+        assert tool_name == "spawn_subagents"
+        captured_params.update(params)
+        return {
+            "success": True,
+            "mode": "blocking",
+            "results": [
+                SubagentResult.create_success(
+                    subagent_id="round_eval_r2",
+                    answer="Short evaluator summary",
+                    workspace_path=str(eval_workspace),
+                    execution_time_seconds=1.0,
+                ).to_dict(),
+            ],
+        }
+
+    monkeypatch.setattr(
+        orchestrator,
+        "_call_subagent_mcp_tool_async",
+        fake_subagent_call,
+    )
+
+    result = await orchestrator._run_round_evaluator_pre_round_if_needed(
+        answers={agent_id: "draft answer v1"},
+    )
+
+    assert result is True
+    tasks = captured_params["tasks"]
+    assert isinstance(tasks, list)
+    task_config = tasks[0]
+    assert len(task_config["task"]) > 10000
+    assert "ORIGINAL TASK:" in task_config["task"]
+    assert "CANDIDATE ANSWERS:" in task_config["task"]
+    assert task_config.get("context_files") in (None, [])
+
+    payload_path = workspace_root / ".massgen" / "round_evaluator" / "round_eval_r1_payload.md"
+    assert not payload_path.exists()
+
+
+@pytest.mark.asyncio
 async def test_background_client_call_tool_uses_correct_keyword_arg(
     mock_orchestrator,
     monkeypatch,
