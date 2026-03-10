@@ -1234,7 +1234,13 @@ class TestStreamWithTools:
                 pass
 
         assert backend._tool_call_context == {}
-        assert not settings_path.exists()
+        # settings.json may still exist with tools.exclude; verify no workflow MCP config
+        if settings_path.exists():
+            settings = json.loads(settings_path.read_text())
+            mcp_servers = settings.get("mcpServers", {})
+            assert "massgen_workflow_tools" not in mcp_servers
+            # model section with disableLoopDetection should be absent
+            assert "model" not in settings
         assert not any(isinstance(server, dict) and server.get("name") == "massgen_workflow_tools" for server in backend.mcp_servers)
 
     @pytest.mark.asyncio
@@ -1432,3 +1438,190 @@ class TestStreamWithTools:
         assert "turn limit exceeded" in (error_chunks[0].error or "")
         assert "max turns reached" in (error_chunks[0].error or "")
         assert fake_proc.terminated is False
+
+
+class TestDefaultModelConsistency:
+    """Test that default model matches between backend and capabilities."""
+
+    def test_default_model_matches_capabilities(self, backend):
+        """Backend constant must match capabilities registry default."""
+        from massgen.backend.capabilities import get_capabilities
+
+        caps = get_capabilities("gemini_cli")
+        assert GEMINI_CLI_DEFAULT_MODEL == caps.default_model
+
+    def test_default_model_is_known(self, backend):
+        """Default model must be in known models list."""
+        from massgen.backend.gemini_cli import GEMINI_CLI_KNOWN_MODELS
+
+        assert GEMINI_CLI_DEFAULT_MODEL in GEMINI_CLI_KNOWN_MODELS
+
+    def test_deprecated_model_removed(self):
+        """gemini-3-pro-preview (deprecated March 9 2026) must not be in known models."""
+        from massgen.backend.gemini_cli import GEMINI_CLI_KNOWN_MODELS
+
+        assert "gemini-3-pro-preview" not in GEMINI_CLI_KNOWN_MODELS
+
+    def test_deprecated_model_not_in_capabilities(self):
+        """gemini-3-pro-preview must not be in capabilities models list."""
+        from massgen.backend.capabilities import get_capabilities
+
+        caps = get_capabilities("gemini_cli")
+        assert "gemini-3-pro-preview" not in caps.models
+
+
+class TestGetDisallowedTools:
+    """Test get_disallowed_tools returns expected tools."""
+
+    def test_returns_expected_tools(self, backend):
+        """get_disallowed_tools should return tools that MassGen overrides."""
+        disallowed = backend.get_disallowed_tools({})
+        assert "enter_plan_mode" in disallowed
+        assert "exit_plan_mode" in disallowed
+        assert "save_memory" in disallowed
+        assert "ask_user" in disallowed
+        assert "write_todos" in disallowed
+
+    def test_does_not_include_essential_tools(self, backend):
+        """Essential Gemini CLI tools should not be disallowed."""
+        disallowed = backend.get_disallowed_tools({})
+        assert "run_shell_command" not in disallowed
+        assert "read_file" not in disallowed
+        assert "write_file" not in disallowed
+
+
+class TestToolsExcludeInSettings:
+    """Test tools.exclude is written to settings.json."""
+
+    def test_tools_exclude_written(self, backend, tmp_path):
+        """settings.json should contain tools.exclude with disallowed tools."""
+        backend._config_cwd = str(tmp_path)
+        backend.system_prompt = "test"
+        backend._write_workspace_config()
+
+        settings_path = tmp_path / ".gemini" / "settings.json"
+        assert settings_path.exists()
+        settings = json.loads(settings_path.read_text())
+        assert "tools" in settings
+        assert "exclude" in settings["tools"]
+        assert "ask_user" in settings["tools"]["exclude"]
+        assert "save_memory" in settings["tools"]["exclude"]
+
+
+class TestHookSupportMethods:
+    """Test hook support methods on GeminiCLIBackend."""
+
+    def test_supports_mcp_server_hooks(self, backend):
+        """Backend should support MCP server hooks."""
+        assert backend.supports_mcp_server_hooks() is True
+
+    def test_get_hook_dir(self, backend, tmp_path):
+        """get_hook_dir should return the .gemini config directory."""
+        backend._config_cwd = str(tmp_path)
+        hook_dir = backend.get_hook_dir()
+        assert hook_dir == tmp_path / ".gemini"
+
+    def test_supports_native_hooks(self, backend):
+        """Backend should support native hooks via adapter."""
+        assert backend.supports_native_hooks() is True
+
+    def test_get_native_hook_adapter(self, backend):
+        """Backend should return a GeminiCLINativeHookAdapter instance."""
+        from massgen.mcp_tools.native_hook_adapters import GeminiCLINativeHookAdapter
+
+        adapter = backend.get_native_hook_adapter()
+        assert isinstance(adapter, GeminiCLINativeHookAdapter)
+
+    def test_write_and_read_hook_payload(self, backend, tmp_path):
+        """write_post_tool_use_hook should write a file that read_unconsumed_hook_content reads."""
+        backend._config_cwd = str(tmp_path)
+        hook_dir = tmp_path / ".gemini"
+        hook_dir.mkdir(parents=True, exist_ok=True)
+
+        # Set hook_dir on adapter
+        adapter = backend.get_native_hook_adapter()
+        if adapter and hasattr(adapter, "hook_dir"):
+            adapter.hook_dir = hook_dir
+
+        backend.write_post_tool_use_hook("test injection content")
+
+        # Verify file was written
+        hook_file = hook_dir / "hook_payload.json"
+        assert hook_file.exists()
+
+        # Read back
+        content = backend.read_unconsumed_hook_content()
+        assert content == "test injection content"
+
+        # File should be consumed
+        assert not hook_file.exists()
+
+    def test_read_unconsumed_when_no_payload(self, backend, tmp_path):
+        """read_unconsumed_hook_content should return None when no payload exists."""
+        backend._config_cwd = str(tmp_path)
+        hook_dir = tmp_path / ".gemini"
+        hook_dir.mkdir(parents=True, exist_ok=True)
+
+        adapter = backend.get_native_hook_adapter()
+        if adapter and hasattr(adapter, "hook_dir"):
+            adapter.hook_dir = hook_dir
+
+        content = backend.read_unconsumed_hook_content()
+        assert content is None
+
+    def test_clear_hook_files(self, backend, tmp_path):
+        """clear_hook_files should remove stale hook files."""
+        backend._config_cwd = str(tmp_path)
+        hook_dir = tmp_path / ".gemini"
+        hook_dir.mkdir(parents=True, exist_ok=True)
+
+        adapter = backend.get_native_hook_adapter()
+        if adapter and hasattr(adapter, "hook_dir"):
+            adapter.hook_dir = hook_dir
+
+        # Create a stale file
+        (hook_dir / "hook_payload.json").write_text("{}", encoding="utf-8")
+        assert (hook_dir / "hook_payload.json").exists()
+
+        backend.clear_hook_files()
+        assert not (hook_dir / "hook_payload.json").exists()
+
+
+class TestHooksInSettingsJson:
+    """Test that native hooks config is merged into settings.json."""
+
+    def test_hooks_section_written_when_config_set(self, backend, tmp_path):
+        """When _massgen_hooks_config is set, hooks should appear in settings.json."""
+        backend._config_cwd = str(tmp_path)
+        backend.system_prompt = "test"
+        backend._massgen_hooks_config = {
+            "hooks": {
+                "AfterTool": [
+                    {
+                        "matcher": ".*",
+                        "hooks": [
+                            {"type": "command", "command": "python3 /path/to/hook.py", "timeout": 10000},
+                        ],
+                    },
+                ],
+            },
+        }
+
+        backend._write_workspace_config()
+
+        settings_path = tmp_path / ".gemini" / "settings.json"
+        settings = json.loads(settings_path.read_text())
+        assert "hooks" in settings
+        assert "AfterTool" in settings["hooks"]
+        assert len(settings["hooks"]["AfterTool"]) == 1
+
+    def test_no_hooks_section_when_no_config(self, backend, tmp_path):
+        """When no hooks config is set, hooks should not appear in settings.json."""
+        backend._config_cwd = str(tmp_path)
+        backend.system_prompt = "test"
+
+        backend._write_workspace_config()
+
+        settings_path = tmp_path / ".gemini" / "settings.json"
+        settings = json.loads(settings_path.read_text())
+        assert "hooks" not in settings

@@ -296,6 +296,35 @@ class TestSpecificBackends:
         assert caps.env_var == "GOOGLE_API_KEY"
         assert "gemini-2.5-pro" in caps.models
 
+    def test_gemini_cli_model_release_dates(self):
+        """Test Gemini CLI has model_release_dates populated."""
+        caps = get_capabilities("gemini_cli")
+        assert caps.model_release_dates is not None
+        assert len(caps.model_release_dates) > 0
+        # Every model in the list should have a release date
+        for model in caps.models:
+            assert model in caps.model_release_dates, f"Model {model} missing from model_release_dates"
+
+    def test_gemini_cli_builtin_tools_use_actual_names(self):
+        """Test Gemini CLI builtin_tools use actual Gemini CLI tool names."""
+        caps = get_capabilities("gemini_cli")
+        assert "run_shell_command" in caps.builtin_tools
+        assert "read_file" in caps.builtin_tools
+        assert "write_file" in caps.builtin_tools
+        assert "replace" in caps.builtin_tools
+        # Old wrong names should not be present
+        assert "shell" not in caps.builtin_tools
+        assert "file_read" not in caps.builtin_tools
+        assert "file_write" not in caps.builtin_tools
+        assert "file_edit" not in caps.builtin_tools
+
+    def test_gemini_cli_deprecated_model_removed(self):
+        """gemini-3-pro-preview (deprecated March 9 2026) must not be in models."""
+        caps = get_capabilities("gemini_cli")
+        assert "gemini-3-pro-preview" not in caps.models
+        if caps.model_release_dates:
+            assert "gemini-3-pro-preview" not in caps.model_release_dates
+
     def test_local_backends_no_api_key(self):
         """Test local backends don't require API keys."""
         local_backends = ["lmstudio", "inference", "chatcompletion"]

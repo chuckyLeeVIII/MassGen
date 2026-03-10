@@ -343,17 +343,20 @@ BACKEND_CAPABILITIES: dict[str, BackendCapabilities] = {
             "web_search",
         },
         builtin_tools=[
-            "shell",
-            "file_read",
-            "file_write",
-            "file_edit",
-            "web_search",
+            "run_shell_command",
+            "read_file",
+            "write_file",
+            "replace",
+            "glob",
+            "grep_search",
+            "list_directory",
+            "read_many_files",
+            "google_web_search",
             "web_fetch",
         ],
         filesystem_support="native",
         models=[
             "gemini-3.1-pro-preview",
-            "gemini-3-pro-preview",
             "gemini-3-flash-preview",
             "gemini-2.5-pro",
             "gemini-2.5-flash",
@@ -361,6 +364,13 @@ BACKEND_CAPABILITIES: dict[str, BackendCapabilities] = {
         ],
         default_model="gemini-3.1-pro-preview",
         env_var="GOOGLE_API_KEY",
+        model_release_dates={
+            "gemini-3.1-pro-preview": "2026-02",
+            "gemini-3-flash-preview": "2025-12",
+            "gemini-2.5-pro": "2025-06",
+            "gemini-2.5-flash": "2025-06",
+            "gemini-2.5-flash-lite": "2025-06",
+        },
         notes=(
             "Google Gemini CLI subprocess wrapper. Auth: CLI login (gemini) first, "
             "then GOOGLE_API_KEY or GEMINI_API_KEY. Native filesystem via CLI. "

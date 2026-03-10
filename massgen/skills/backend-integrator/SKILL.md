@@ -526,32 +526,84 @@ BACKEND_CONFIGS = {
 }
 ```
 
-#### 7.3 Native Tool Permission Testing (CLI/SDK backends)
+#### 7.3 Hook Firing Test (CLI/SDK backends) ⚠️ REQUIRED
+**Script**: `scripts/test_hook_backends.py`
+
+**This is mandatory for every new CLI/SDK backend.** The script verifies that the full hook pipeline actually fires during real streaming — not just that the hook data structures are correct.
+
+Two modes:
+
+**Unit mode** (no API calls — runs in CI):
+```bash
+uv run python scripts/test_hook_backends.py --backend your_backend
+```
+Verifies: backend stores `GeneralHookManager`, `MidStreamInjectionHook` returns injection content, `HighPriorityTaskReminderHook` fires, combined hooks aggregate correctly.
+
+**E2E mode** (real API calls):
+```bash
+uv run python scripts/test_hook_backends.py --backend your_backend --e2e
+uv run python scripts/test_hook_backends.py --backend your_backend --e2e --verbose
+```
+Verifies the complete live flow: PreToolUse hook fires → tool executes → PostToolUse hook fires → injection content is fed back to the model and acknowledged.
+
+**Adding your backend**: Add an entry to `BACKEND_CONFIGS` in the script:
+```python
+"your_backend": {
+    "type": "your_backend",
+    "model": "your-model",
+    "description": "Your Backend description",
+    "api_style": "openai",  # or "anthropic", "gemini"
+},
+```
+
+**Currently covered**: `claude`, `openai`, `gemini` (native SDK), `openrouter`, `grok`
+**Not yet covered**: `codex`, `claude_code`, `copilot`, `gemini_cli` — these use file-based IPC or SDK-native hooks and need separate E2E hook verification.
+
+**Why this matters**: Unit tests verify that hook data structures are correct. This script verifies that hooks actually fire during a real streaming turn. A backend can pass all unit tests and still silently drop hooks during live execution.
+
+#### 7.4 Sandbox / Path Permission Test (CLI/SDK backends) ⚠️ REQUIRED
 **Script**: `scripts/test_native_tools_sandbox.py`
 
-For backends with built-in tools (CLI/SDK wrappers), run the sandbox permission test script to verify that:
-- Native tools respect MassGen's permission boundaries
-- Read-only paths cannot be written to
-- Workspace isolation works correctly
-- Docker mode sandboxing is enforced
+**This is mandatory for every new CLI/SDK backend with built-in file/shell tools.** It runs real agents against a real filesystem with unique secrets and verifies that permission boundaries are actually enforced — not just that the enforcement code exists.
 
 ```bash
 # Test your new backend
 uv run python scripts/test_native_tools_sandbox.py --backend your_backend
 
-# Test with Docker mode
-uv run python scripts/test_native_tools_sandbox.py --backend your_backend --docker
+# Use LLM judge to detect subtle leakage
+uv run python scripts/test_native_tools_sandbox.py --backend your_backend --llm-judge
 ```
 
-This script:
-- Attempts file operations at various permission levels
-- Verifies that disallowed operations are blocked
-- Reports which sandbox restrictions are enforced vs bypassed
-- Is essential for understanding the limitations of each native backend
+The script verifies the full permission matrix:
 
-**Note**: Run this for both local and Docker modes to understand how sandboxing differs.
+| Zone | Expected reads | Expected writes |
+|------|---------------|-----------------|
+| Workspace (cwd) | ✅ allowed | ✅ allowed |
+| Writable context path | ✅ allowed | ✅ allowed |
+| Read-only context path | ✅ allowed | ❌ blocked |
+| Outside all contexts | depends on backend | ❌ blocked |
+| Parent directory | depends on backend | ❌ blocked |
+| `/tmp` | ✅ allowed | depends on backend |
 
-#### 7.4 Config Validation
+It uses **unique secrets** (UUIDs written to each zone's files) to detect unauthorized reads even when the operation "fails" — if the secret string appears in the model's response, there's a leak regardless of error messages.
+
+**Adding your backend**: Add an entry to `BACKEND_CONFIGS` in the script:
+```python
+"your_backend": {
+    "module": "massgen.backend.your_backend",
+    "class": "YourBackend",
+    "model": "your-model",
+    "blocks_reads_outside": True,   # Does your enforcement block reads?
+    "blocks_tmp_writes": True,      # Does your enforcement block /tmp writes?
+},
+```
+
+**Currently covered**: `claude_code`, `codex`
+**Not yet covered**: `copilot`, `gemini_cli` — must be added when those backends are used in production.
+
+**Why this matters**: Permission callback and hook unit tests verify the enforcement logic in isolation. This script verifies that enforcement actually stops a live agent from accessing restricted paths. A backend can have correct hook logic and still allow unauthorized access if the hook isn't wired into the right execution path.
+
+#### 7.5 Config Validation
 ```bash
 uv run python scripts/validate_all_configs.py
 ```

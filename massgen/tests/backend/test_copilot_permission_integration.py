@@ -42,6 +42,7 @@ def _make_copilot_backend_with_ppm(
         backend.client = MagicMock()
         backend.sessions = {}
         backend._session_signatures = {}
+        backend._docker_execution = False
 
         # Build real PPM
         ppm = PathPermissionManager(
@@ -56,6 +57,55 @@ def _make_copilot_backend_with_ppm(
         fm = MagicMock()
         fm.path_permission_manager = ppm
         fm.get_current_workspace.return_value = workspace
+        backend.filesystem_manager = fm
+
+        return backend, ppm
+
+
+def _make_copilot_backend_docker_mode(
+    workspace: Path,
+    context_paths: list[tuple[Path, Permission]] | None = None,
+    *,
+    container_running: bool = True,
+):
+    """Create a CopilotBackend in Docker mode with a real PathPermissionManager."""
+    mock_copilot_module = MagicMock()
+    mock_copilot_module.CopilotClient = MagicMock
+    mock_copilot_module.Tool = MagicMock
+
+    with patch.dict("sys.modules", {"copilot": mock_copilot_module}):
+        from massgen.backend.copilot import CopilotBackend
+
+        backend = CopilotBackend.__new__(CopilotBackend)
+        backend.config = {
+            "command_line_execution_mode": "docker",
+            "agent_id": "docker-test-agent",
+        }
+        backend.client = MagicMock()
+        backend.sessions = {}
+        backend._session_signatures = {}
+        backend._docker_execution = True
+
+        # Build real PPM
+        ppm = PathPermissionManager(
+            context_write_access_enabled=False,
+            enforce_read_before_delete=False,
+        )
+        ppm.add_path(workspace, Permission.WRITE, "workspace")
+        for ctx_path, ctx_perm in context_paths or []:
+            ppm.add_path(ctx_path, ctx_perm, "context")
+
+        # Wire PPM into a mock FilesystemManager with docker_manager
+        fm = MagicMock()
+        fm.path_permission_manager = ppm
+        fm.get_current_workspace.return_value = workspace
+
+        dm = MagicMock()
+        if container_running:
+            dm.get_container.return_value = MagicMock()  # container exists
+        else:
+            dm.get_container.return_value = None
+        fm.docker_manager = dm
         backend.filesystem_manager = fm
 
         return backend, ppm
@@ -360,3 +410,143 @@ class TestTwoLayerDefense:
             json.dumps({"file_path": str(workspace / "ok.txt")}),
         )
         assert result.allowed is True
+
+
+# ---------------------------------------------------------------------------
+# Docker Mode Integration
+# ---------------------------------------------------------------------------
+class TestDockerModeIntegration:
+    """Integration tests for Docker execution mode with real PPM."""
+
+    def test_docker_mode_disallows_builtin_tools(self, tmp_path):
+        """Docker mode should return file/shell tool names to disable."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        backend, _ = _make_copilot_backend_docker_mode(workspace)
+
+        tools = backend.get_disallowed_tools(backend.config)
+        assert len(tools) > 0
+        # Should include file and shell tools
+        tool_names_lower = [t.lower() for t in tools]
+        assert any("file" in t for t in tool_names_lower)
+        assert any("shell" in t or "command" in t for t in tool_names_lower)
+
+    def test_docker_mode_allows_empty_when_not_docker(self, tmp_path):
+        """Non-Docker mode should return empty disallowed tools."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        backend, _ = _make_copilot_backend_with_ppm(workspace)
+
+        tools = backend.get_disallowed_tools(backend.config)
+        assert tools == []
+
+    def test_docker_mode_is_docker_mode_with_container(self, tmp_path):
+        """_is_docker_mode should be True when container is running."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        backend, _ = _make_copilot_backend_docker_mode(
+            workspace,
+            container_running=True,
+        )
+        assert backend._is_docker_mode is True
+
+    def test_docker_mode_not_docker_without_container(self, tmp_path):
+        """_is_docker_mode should be False when no container is running."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        backend, _ = _make_copilot_backend_docker_mode(
+            workspace,
+            container_running=False,
+        )
+        assert backend._is_docker_mode is False
+
+    def test_docker_mode_permission_callback_still_works(self, tmp_path):
+        """PPM permission callback should still enforce in Docker mode (defense-in-depth)."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        backend, _ = _make_copilot_backend_docker_mode(workspace)
+        callback = backend._build_permission_callback("approve")
+
+        # Write inside workspace — approved
+        result = callback(
+            {"kind": "write", "path": str(workspace / "file.txt")},
+            SDK_CONTEXT,
+        )
+        assert result["kind"] == "approved"
+
+        # Write outside workspace — denied
+        result = callback(
+            {"kind": "write", "path": "/etc/passwd"},
+            SDK_CONTEXT,
+        )
+        assert result["kind"] == "denied-by-rules"
+
+    def test_docker_mode_read_context_path_still_works(self, tmp_path):
+        """Read context paths should still be enforced in Docker mode."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        ref_dir = tmp_path / "reference"
+        ref_dir.mkdir()
+
+        backend, _ = _make_copilot_backend_docker_mode(
+            workspace,
+            context_paths=[(ref_dir, Permission.READ)],
+        )
+        callback = backend._build_permission_callback("approve")
+
+        # Read from context — approved
+        result = callback(
+            {"kind": "read", "path": str(ref_dir / "doc.md")},
+            SDK_CONTEXT,
+        )
+        assert result["kind"] == "approved"
+
+        # Write to read-only context — denied
+        result = callback(
+            {"kind": "write", "path": str(ref_dir / "doc.md")},
+            SDK_CONTEXT,
+        )
+        assert result["kind"] == "denied-by-rules"
+
+    @pytest.mark.asyncio
+    async def test_docker_mode_ppm_hook_still_catches(self, tmp_path):
+        """Layer 2 PPM hook should still work in Docker mode."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        _, ppm = _make_copilot_backend_docker_mode(workspace)
+
+        hook = PathPermissionManagerHook(ppm)
+
+        # Write inside workspace — allowed
+        result = await hook.execute(
+            "Write",
+            json.dumps({"file_path": str(workspace / "ok.txt")}),
+        )
+        assert result.allowed is True
+
+        # Write outside workspace — blocked
+        result = await hook.execute(
+            "Write",
+            json.dumps({"file_path": "/etc/passwd"}),
+        )
+        assert result.allowed is False
+
+    def test_docker_mode_excluded_tools_merge(self, tmp_path):
+        """Docker-disallowed tools should merge with user-configured exclude_tools."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        backend, _ = _make_copilot_backend_docker_mode(workspace)
+        backend.config["exclude_tools"] = ["custom_tool_a"]
+
+        # Resolve backend filters
+        _, excluded = backend._resolve_backend_tool_filters({})
+        assert "custom_tool_a" in excluded
+
+        # Merge with Docker-disallowed
+        docker_excluded = backend.get_disallowed_tools(backend.config)
+        merged = list(set((excluded or []) + docker_excluded))
+
+        # Both user-excluded and Docker-excluded present
+        assert "custom_tool_a" in merged
+        assert any("File" in t or "file" in t for t in merged)
+        assert len(merged) > len(excluded)

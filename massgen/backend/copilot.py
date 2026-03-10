@@ -877,7 +877,7 @@ class CopilotBackend(NativeToolBackendMixin, StreamingBufferMixin, LLMBackend):
         await self._ensure_started()
 
         agent_id = kwargs.get("agent_id", self.config.get("agent_id") or "default")
-        model = kwargs.get("model") or self.config.get("model") or "gpt-4.1"
+        model = kwargs.get("model") or self.config.get("model") or "gpt-5-mini"
         queue: asyncio.Queue = asyncio.Queue()
 
         buffer_kwargs = {k: v for k, v in kwargs.items() if k != "agent_id"}

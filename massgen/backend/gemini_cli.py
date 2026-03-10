@@ -31,13 +31,12 @@ from .base import (
 )
 from .native_tool_mixin import NativeToolBackendMixin
 
-GEMINI_CLI_DEFAULT_MODEL = "gemini-2.5-pro"
+GEMINI_CLI_DEFAULT_MODEL = "gemini-3.1-pro-preview"
 GEMINI_CLI_KNOWN_MODELS = [
     "gemini-2.5-pro",
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
     "gemini-3-flash-preview",
-    "gemini-3-pro-preview",
     "gemini-3.1-pro-preview",
 ]
 GEMINI_WORKFLOW_MAX_SESSION_TURNS = 50
@@ -62,6 +61,10 @@ class GeminiCLIBackend(NativeToolBackendMixin, StreamingBufferMixin, LLMBackend)
     def __init__(self, api_key: str | None = None, **kwargs):
         super().__init__(api_key, **kwargs)
         self.__init_native_tool_mixin__()
+        self._init_native_hook_adapter(
+            "massgen.mcp_tools.native_hook_adapters.GeminiCLINativeHookAdapter",
+        )
+        self._hook_sequence = 0
 
         self.approval_mode = kwargs.get("approval_mode", "yolo")
 
@@ -1064,6 +1067,19 @@ class GeminiCLIBackend(NativeToolBackendMixin, StreamingBufferMixin, LLMBackend)
         if mcp_servers_dict:
             settings["mcpServers"] = mcp_servers_dict
 
+        disallowed = self.get_disallowed_tools({})
+        if disallowed:
+            settings.setdefault("tools", {})["exclude"] = disallowed
+
+        # Merge native hooks config into settings.json
+        adapter = self.get_native_hook_adapter()
+        if adapter and hasattr(adapter, "hook_dir"):
+            adapter.hook_dir = config_dir
+        if self._massgen_hooks_config:
+            hooks_section = self._massgen_hooks_config.get("hooks", {})
+            if hooks_section:
+                settings["hooks"] = hooks_section
+
         if self._workflow_mcp_active:
             settings["model"] = {
                 "disableLoopDetection": True,
@@ -1572,7 +1588,13 @@ class GeminiCLIBackend(NativeToolBackendMixin, StreamingBufferMixin, LLMBackend)
             yield self._build_error_chunk(str(e))
 
     def get_disallowed_tools(self, config: dict[str, Any]) -> list[str]:
-        return []
+        return [
+            "enter_plan_mode",
+            "exit_plan_mode",
+            "save_memory",
+            "ask_user",
+            "write_todos",
+        ]
 
     def get_tool_category_overrides(self) -> dict[str, str]:
         """Return tool category overrides. Gemini CLI has native filesystem/shell."""
@@ -1590,6 +1612,106 @@ class GeminiCLIBackend(NativeToolBackendMixin, StreamingBufferMixin, LLMBackend)
 
     def get_filesystem_support(self) -> FilesystemSupport:
         return FilesystemSupport.NATIVE
+
+    # ── MCP server-level hook IPC ────────────────────────────────────────
+
+    def supports_mcp_server_hooks(self) -> bool:
+        """Return True — Gemini CLI uses file-based hook IPC via settings.json hooks."""
+        return True
+
+    def get_hook_dir(self) -> Path:
+        """Return the directory used for hook IPC files."""
+        return self._workspace_config_dir()
+
+    def write_post_tool_use_hook(
+        self,
+        content: str,
+        tool_matcher: str = "*",
+        ttl_seconds: float = 30.0,
+    ) -> None:
+        """Write a hook payload for the hook script to consume.
+
+        Args:
+            content: Injection text to append to the next tool result.
+            tool_matcher: Glob pattern for which tools should receive the injection.
+            ttl_seconds: Time-to-live before the payload expires.
+        """
+        adapter = self.get_native_hook_adapter()
+        if adapter and hasattr(adapter, "write_hook_payload"):
+            adapter.write_hook_payload(
+                content=content,
+                event="AfterTool",
+                tool_matcher=tool_matcher,
+                ttl_seconds=ttl_seconds,
+            )
+        else:
+            # Fallback: write directly
+            import time
+
+            self._hook_sequence += 1
+            hook_dir = self.get_hook_dir()
+            hook_dir.mkdir(parents=True, exist_ok=True)
+
+            payload = {
+                "inject": {"content": content, "strategy": "tool_result"},
+                "event": "AfterTool",
+                "tool_matcher": tool_matcher,
+                "expires_at": time.time() + ttl_seconds,
+                "sequence": self._hook_sequence,
+            }
+
+            hook_file = hook_dir / "hook_payload.json"
+            tmp_file = hook_file.with_suffix(".tmp")
+            tmp_file.write_text(json.dumps(payload), encoding="utf-8")
+            tmp_file.replace(hook_file)
+
+            logger.info(
+                "Wrote hook_payload.json (seq=%d, %d chars)",
+                self._hook_sequence,
+                len(content),
+            )
+
+    def read_unconsumed_hook_content(self) -> str | None:
+        """Read and remove any unconsumed hook payload.
+
+        Called after a streaming round ends. If the hook file still exists,
+        the hook script never consumed it. Returns the injection content
+        so the orchestrator can carry it forward to the next round.
+        """
+        adapter = self.get_native_hook_adapter()
+        if adapter and hasattr(adapter, "read_unconsumed_hook_content"):
+            return adapter.read_unconsumed_hook_content()
+
+        hook_file = self.get_hook_dir() / "hook_payload.json"
+        try:
+            data = json.loads(hook_file.read_text(encoding="utf-8"))
+            hook_file.unlink(missing_ok=True)
+            inject = data.get("inject", {})
+            content = inject.get("content")
+            if content:
+                logger.info(
+                    "Read unconsumed hook content (%d chars) — carrying forward",
+                    len(content),
+                )
+            return content
+        except FileNotFoundError:
+            return None
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("Failed reading unconsumed hook file: %s", e)
+            hook_file.unlink(missing_ok=True)
+            return None
+
+    def clear_hook_files(self) -> None:
+        """Remove stale hook files. Called at start of each turn."""
+        adapter = self.get_native_hook_adapter()
+        if adapter and hasattr(adapter, "clear_hook_files"):
+            adapter.clear_hook_files()
+        else:
+            hook_dir = self.get_hook_dir()
+            for filename in ("hook_payload.json", "hook_payload.tmp"):
+                (hook_dir / filename).unlink(missing_ok=True)
+
+    # ── End hook IPC ─────────────────────────────────────────────────────
 
     def is_stateful(self) -> bool:
         return True
@@ -1614,4 +1736,5 @@ class GeminiCLIBackend(NativeToolBackendMixin, StreamingBufferMixin, LLMBackend)
         self._stop_after_first_workflow_call = False
         self._last_turn_missing_workflow_call = False
         self._remove_runtime_mcp_server("massgen_workflow_tools")
+        self.clear_hook_files()
         self._cleanup_workspace_config()
