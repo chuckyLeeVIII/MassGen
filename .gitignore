@@ -244,3 +244,5 @@ node_modules/
 /.gemini/google_accounts.json
 /.gemini/oauth_creds.json
 /.gemini/.env
+# WIP tests not yet implemented
+massgen/tests/_wip/

@@ -70,7 +70,11 @@ class TestHookScriptAfterToolInjection:
     def test_injects_additional_context(self, tmp_path: Path) -> None:
         self._write_payload(tmp_path, "Agent B answered: 42")
         result = _run_hook_script(str(tmp_path), "AfterTool")
-        assert result == {"additionalContext": "Agent B answered: 42"}
+        assert result == {
+            "hookSpecificOutput": {
+                "additionalContext": "Agent B answered: 42",
+            },
+        }
 
     def test_consumes_payload_file(self, tmp_path: Path) -> None:
         """After consumption, the payload file should be deleted."""
@@ -82,7 +86,7 @@ class TestHookScriptAfterToolInjection:
         """Payload is single-use — second invocation should return empty."""
         self._write_payload(tmp_path, "one-shot content")
         first = _run_hook_script(str(tmp_path), "AfterTool")
-        assert "additionalContext" in first
+        assert "additionalContext" in first["hookSpecificOutput"]
 
         second = _run_hook_script(str(tmp_path), "AfterTool")
         assert second == {}
@@ -92,7 +96,7 @@ class TestHookScriptAfterToolInjection:
         large_content = "x" * 100_000
         self._write_payload(tmp_path, large_content)
         result = _run_hook_script(str(tmp_path), "AfterTool")
-        assert result["additionalContext"] == large_content
+        assert result["hookSpecificOutput"]["additionalContext"] == large_content
 
 
 class TestHookScriptBeforeToolInjection:
@@ -123,6 +127,308 @@ class TestHookScriptBeforeToolInjection:
         result = _run_hook_script(str(tmp_path), "BeforeTool")
         assert result["decision"] == "deny"
         assert "Permission denied" in result["reason"]
+
+
+class TestHookScriptPermissionManifest:
+    """BeforeTool can enforce sandbox rules from a serialized manifest."""
+
+    def _write_permission_manifest(
+        self,
+        hook_dir: Path,
+        *,
+        workspace: Path,
+        writable: Path,
+        readonly: Path,
+    ) -> None:
+        hook_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": 1,
+            "workspace": str(workspace.resolve()),
+            "managed_paths": [
+                {
+                    "path": str(workspace.resolve()),
+                    "permission": "write",
+                    "path_type": "workspace",
+                    "is_file": False,
+                },
+                {
+                    "path": str(writable.resolve()),
+                    "permission": "write",
+                    "path_type": "context",
+                    "is_file": False,
+                },
+                {
+                    "path": str(readonly.resolve()),
+                    "permission": "read",
+                    "path_type": "context",
+                    "is_file": False,
+                },
+            ],
+        }
+        (hook_dir / "permission_manifest.json").write_text(json.dumps(payload))
+
+    def test_denies_read_outside_allowed_paths(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "workspace"
+        writable = tmp_path / "writable"
+        readonly = tmp_path / "readonly"
+        outside = tmp_path / "outside"
+        for path in (workspace, writable, readonly, outside):
+            path.mkdir()
+
+        self._write_permission_manifest(
+            tmp_path,
+            workspace=workspace,
+            writable=writable,
+            readonly=readonly,
+        )
+        stdin = json.dumps(
+            {
+                "toolName": "read_file",
+                "toolArgs": {"path": str(outside / "secret.txt")},
+            },
+        )
+
+        result = _run_hook_script(str(tmp_path), "BeforeTool", stdin_data=stdin)
+        assert result["decision"] == "deny"
+        assert "outside allowed directories" in result["reason"]
+
+    def test_denies_read_outside_allowed_paths_with_current_gemini_schema(self, tmp_path: Path) -> None:
+        """Current Gemini CLI sends tool_name/tool_input rather than toolName/toolArgs."""
+        workspace = tmp_path / "workspace"
+        writable = tmp_path / "writable"
+        readonly = tmp_path / "readonly"
+        outside = tmp_path / "outside"
+        for path in (workspace, writable, readonly, outside):
+            path.mkdir()
+
+        self._write_permission_manifest(
+            tmp_path,
+            workspace=workspace,
+            writable=writable,
+            readonly=readonly,
+        )
+        stdin = json.dumps(
+            {
+                "tool_name": "read_file",
+                "tool_input": {"file_path": str(outside / "secret.txt")},
+            },
+        )
+
+        result = _run_hook_script(str(tmp_path), "BeforeTool", stdin_data=stdin)
+        assert result["decision"] == "deny"
+        assert "outside allowed directories" in result["reason"]
+
+    def test_allows_write_to_writable_context(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "workspace"
+        writable = tmp_path / "writable"
+        readonly = tmp_path / "readonly"
+        for path in (workspace, writable, readonly):
+            path.mkdir()
+
+        self._write_permission_manifest(
+            tmp_path,
+            workspace=workspace,
+            writable=writable,
+            readonly=readonly,
+        )
+        stdin = json.dumps(
+            {
+                "toolName": "write_file",
+                "toolArgs": {"path": str(writable / "notes.txt")},
+            },
+        )
+
+        result = _run_hook_script(str(tmp_path), "BeforeTool", stdin_data=stdin)
+        assert result == {}
+
+    def test_allows_write_to_workspace_with_current_gemini_schema(self, tmp_path: Path) -> None:
+        """Current Gemini write_file calls can use tool_input + absolute_path."""
+        workspace = tmp_path / "workspace"
+        writable = tmp_path / "writable"
+        readonly = tmp_path / "readonly"
+        for path in (workspace, writable, readonly):
+            path.mkdir()
+
+        self._write_permission_manifest(
+            tmp_path,
+            workspace=workspace,
+            writable=writable,
+            readonly=readonly,
+        )
+        stdin = json.dumps(
+            {
+                "tool_name": "write_file",
+                "tool_input": {"absolute_path": str(workspace / "notes.txt")},
+            },
+        )
+
+        result = _run_hook_script(str(tmp_path), "BeforeTool", stdin_data=stdin)
+        assert result == {}
+
+    def test_denies_write_to_readonly_context(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "workspace"
+        writable = tmp_path / "writable"
+        readonly = tmp_path / "readonly"
+        for path in (workspace, writable, readonly):
+            path.mkdir()
+
+        self._write_permission_manifest(
+            tmp_path,
+            workspace=workspace,
+            writable=writable,
+            readonly=readonly,
+        )
+        stdin = json.dumps(
+            {
+                "toolName": "write_file",
+                "toolArgs": {"path": str(readonly / "notes.txt")},
+            },
+        )
+
+        result = _run_hook_script(str(tmp_path), "BeforeTool", stdin_data=stdin)
+        assert result["decision"] == "deny"
+        assert "read-only context path" in result["reason"]
+
+    def test_denies_shell_write_when_dir_path_is_outside_allowed_paths(self, tmp_path: Path) -> None:
+        """Shell tools often provide a dir_path with a relative command target."""
+        workspace = tmp_path / "workspace"
+        writable = tmp_path / "writable"
+        readonly = tmp_path / "readonly"
+        outside = tmp_path / "outside"
+        for path in (workspace, writable, readonly, outside):
+            path.mkdir()
+
+        self._write_permission_manifest(
+            tmp_path,
+            workspace=workspace,
+            writable=writable,
+            readonly=readonly,
+        )
+        stdin = json.dumps(
+            {
+                "tool_name": "run_shell_command",
+                "tool_input": {
+                    "command": "echo 'test content' > bash_output.txt",
+                    "dir_path": str(outside),
+                },
+            },
+        )
+
+        result = _run_hook_script(str(tmp_path), "BeforeTool", stdin_data=stdin)
+        assert result["decision"] == "deny"
+        assert str(outside) in result["reason"]
+
+    def test_denies_shell_write_when_directory_is_outside_allowed_paths(self, tmp_path: Path) -> None:
+        """Current Gemini shell docs use `directory` for the working directory."""
+        workspace = tmp_path / "workspace"
+        writable = tmp_path / "writable"
+        readonly = tmp_path / "readonly"
+        outside = tmp_path / "outside"
+        for path in (workspace, writable, readonly, outside):
+            path.mkdir()
+
+        self._write_permission_manifest(
+            tmp_path,
+            workspace=workspace,
+            writable=writable,
+            readonly=readonly,
+        )
+        stdin = json.dumps(
+            {
+                "tool_name": "run_shell_command",
+                "tool_input": {
+                    "command": "echo 'test content' > bash_output.txt",
+                    "directory": "../outside",
+                },
+            },
+        )
+
+        result = _run_hook_script(str(tmp_path), "BeforeTool", stdin_data=stdin)
+        assert result["decision"] == "deny"
+        assert str(outside) in result["reason"]
+
+    def test_denies_shell_read_when_directory_is_outside_allowed_paths(self, tmp_path: Path) -> None:
+        """Read commands with a relative target should still be blocked by directory scope."""
+        workspace = tmp_path / "workspace"
+        writable = tmp_path / "writable"
+        readonly = tmp_path / "readonly"
+        outside = tmp_path / "outside"
+        for path in (workspace, writable, readonly, outside):
+            path.mkdir()
+
+        self._write_permission_manifest(
+            tmp_path,
+            workspace=workspace,
+            writable=writable,
+            readonly=readonly,
+        )
+        stdin = json.dumps(
+            {
+                "tool_name": "run_shell_command",
+                "tool_input": {
+                    "command": "cat data.txt",
+                    "directory": str(outside),
+                },
+            },
+        )
+
+        result = _run_hook_script(str(tmp_path), "BeforeTool", stdin_data=stdin)
+        assert result["decision"] == "deny"
+        assert str(outside) in result["reason"]
+
+    def test_denies_list_directory_outside_with_current_gemini_schema(self, tmp_path: Path) -> None:
+        """Directory listing tools should be treated as read-like operations."""
+        workspace = tmp_path / "workspace"
+        writable = tmp_path / "writable"
+        readonly = tmp_path / "readonly"
+        outside = tmp_path / "outside"
+        for path in (workspace, writable, readonly, outside):
+            path.mkdir()
+
+        self._write_permission_manifest(
+            tmp_path,
+            workspace=workspace,
+            writable=writable,
+            readonly=readonly,
+        )
+        stdin = json.dumps(
+            {
+                "tool_name": "list_directory",
+                "tool_input": {"absolute_path": str(outside)},
+            },
+        )
+
+        result = _run_hook_script(str(tmp_path), "BeforeTool", stdin_data=stdin)
+        assert result["decision"] == "deny"
+        assert "outside allowed directories" in result["reason"]
+
+    def test_denies_read_many_files_outside_allowed_paths(self, tmp_path: Path) -> None:
+        """Batch read tools may pass a `paths` list instead of a single file path."""
+        workspace = tmp_path / "workspace"
+        writable = tmp_path / "writable"
+        readonly = tmp_path / "readonly"
+        outside = tmp_path / "outside"
+        for path in (workspace, writable, readonly, outside):
+            path.mkdir()
+
+        self._write_permission_manifest(
+            tmp_path,
+            workspace=workspace,
+            writable=writable,
+            readonly=readonly,
+        )
+        stdin = json.dumps(
+            {
+                "tool_name": "read_many_files",
+                "tool_input": {
+                    "paths": [str(outside / "secret.txt")],
+                },
+            },
+        )
+
+        result = _run_hook_script(str(tmp_path), "BeforeTool", stdin_data=stdin)
+        assert result["decision"] == "deny"
+        assert "outside allowed directories" in result["reason"]
 
 
 class TestHookScriptExpiry:

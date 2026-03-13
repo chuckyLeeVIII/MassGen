@@ -80,6 +80,12 @@ class GeminiCLIBackend(NativeToolBackendMixin, StreamingBufferMixin, LLMBackend)
                 f"Gemini CLI: model '{self.model}' not in known models list " f"{GEMINI_CLI_KNOWN_MODELS}. It may not be supported.",
             )
         self._config_cwd = kwargs.get("cwd")
+
+        # Wire hook_dir on the adapter now that cwd is known
+        adapter = self.get_native_hook_adapter()
+        if adapter and hasattr(adapter, "hook_dir"):
+            adapter.hook_dir = self._workspace_config_dir()
+
         self.system_prompt = kwargs.get("system_prompt", "")
         configured_mcp_servers = kwargs.get("mcp_servers", [])
         self.mcp_servers = list(configured_mcp_servers) if isinstance(configured_mcp_servers, list) else []
@@ -240,9 +246,13 @@ class GeminiCLIBackend(NativeToolBackendMixin, StreamingBufferMixin, LLMBackend)
         """Build environment dict for subprocess execution with API key injection."""
         env = dict(os.environ if base_env is None else base_env)
 
+        # Always set GEMINI_HOME so Gemini CLI reads settings.json (hooks,
+        # MCP servers) from the workspace .gemini/ dir, not ~/.gemini/.
+        workspace_gemini = str(self._workspace_config_dir())
+        env["GEMINI_HOME"] = workspace_gemini
+
         if self._docker_execution:
             env.update(self._get_configured_credentials_env())
-            env.setdefault("GEMINI_HOME", str(Path(self.cwd) / ".gemini"))
 
         if os.name == "nt":
             env.setdefault("PATHEXT", ".COM;.EXE;.BAT;.CMD")
@@ -1075,10 +1085,19 @@ class GeminiCLIBackend(NativeToolBackendMixin, StreamingBufferMixin, LLMBackend)
         adapter = self.get_native_hook_adapter()
         if adapter and hasattr(adapter, "hook_dir"):
             adapter.hook_dir = config_dir
-        if self._massgen_hooks_config:
-            hooks_section = self._massgen_hooks_config.get("hooks", {})
-            if hooks_section:
-                settings["hooks"] = hooks_section
+        permission_hooks_config = self._build_permission_hooks_config(config_dir)
+        merged_hooks_config = permission_hooks_config
+        if adapter and self._massgen_hooks_config:
+            merged_hooks_config = adapter.merge_native_configs(
+                permission_hooks_config,
+                self._massgen_hooks_config,
+            )
+        elif self._massgen_hooks_config:
+            merged_hooks_config = self._massgen_hooks_config
+
+        hooks_section = merged_hooks_config.get("hooks", {}) if merged_hooks_config else {}
+        if hooks_section:
+            settings["hooks"] = hooks_section
 
         if self._workflow_mcp_active:
             settings["model"] = {
@@ -1095,7 +1114,70 @@ class GeminiCLIBackend(NativeToolBackendMixin, StreamingBufferMixin, LLMBackend)
         else:
             self._restore_managed_workspace_file(settings_path)
 
+        # Copy credentials, trusted hooks, and state from ~/.gemini/ since
+        # GEMINI_HOME points to the workspace .gemini/ dir.
+        self._copy_credentials_to_workspace()
+
         self._prune_managed_workspace_dirs()
+
+    def _build_permission_manifest(self) -> dict[str, Any] | None:
+        """Serialize PathPermissionManager state for standalone Gemini hook enforcement."""
+        fm = getattr(self, "filesystem_manager", None)
+        if fm is None:
+            return None
+
+        ppm = getattr(fm, "path_permission_manager", None)
+        managed_paths = getattr(ppm, "managed_paths", None)
+        if ppm is None or not managed_paths:
+            return None
+
+        return {
+            "version": 1,
+            "workspace": str(Path(self.cwd).resolve()),
+            "managed_paths": [
+                {
+                    "path": str(Path(mp.path).resolve()),
+                    "permission": mp.permission.value,
+                    "path_type": mp.path_type,
+                    "is_file": bool(mp.is_file),
+                    "protected_paths": [str(Path(p).resolve()) for p in (mp.protected_paths or [])],
+                }
+                for mp in managed_paths
+            ],
+        }
+
+    def _build_permission_hooks_config(self, config_dir: Path) -> dict[str, Any]:
+        """Build a default BeforeTool hook config for sandbox permission enforcement."""
+        manifest = self._build_permission_manifest()
+        manifest_path = config_dir / "permission_manifest.json"
+        if not manifest:
+            self._restore_managed_workspace_file(manifest_path)
+            return {}
+
+        from ..mcp_tools.native_hook_adapters.gemini_cli_adapter import (
+            _HOOK_SCRIPT_PATH,
+        )
+
+        self._track_managed_workspace_file(manifest_path)
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+        command = f"{sys.executable} {str(_HOOK_SCRIPT_PATH)} " f"--hook-dir {str(config_dir)} --event BeforeTool"
+        return {
+            "hooks": {
+                "BeforeTool": [
+                    {
+                        "matcher": ".*",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": command,
+                                "timeout": 10000,
+                            },
+                        ],
+                    },
+                ],
+            },
+        }
 
     def _build_merged_mcp_servers_dict(self) -> dict[str, Any]:
         """Merge config-level and runtime MCP servers into a Gemini settings dict."""
@@ -1177,23 +1259,35 @@ class GeminiCLIBackend(NativeToolBackendMixin, StreamingBufferMixin, LLMBackend)
             logger.info("Cleaned up Gemini CLI workspace config.")
 
     def _copy_credentials_to_workspace(self) -> None:
-        """Copy host Gemini credentials to workspace .gemini/ for Docker execution."""
-        if self.api_key:
-            return
+        """Copy host Gemini credentials and state to workspace .gemini/.
 
+        Since GEMINI_HOME points to the workspace .gemini/ dir, we need to
+        copy over authentication credentials, trusted hooks, and other state
+        that Gemini CLI expects in its home directory.
+        """
         gemini_dir = self._ensure_workspace_config_dir()
         host_gemini = Path.home() / ".gemini"
         copied = []
-        for f in ("google_accounts.json", "oauth_creds.json", ".env"):
+
+        # Credential files (only needed for OAuth login, not API key auth)
+        cred_files = ("google_accounts.json", "oauth_creds.json", ".env")
+        # State files needed for hooks and session management
+        state_files = ("trusted_hooks.json", "installation_id", "state.json")
+
+        files_to_copy = state_files if self.api_key else (*cred_files, *state_files)
+        for f in files_to_copy:
             src = host_gemini / f
             if src.exists():
                 dest = gemini_dir / f
+                # Don't overwrite settings.json (we write our own)
+                if dest.exists() and f == "settings.json":
+                    continue
                 self._track_managed_workspace_file(dest)
                 shutil.copy2(str(src), str(dest))
                 copied.append(f)
         if copied:
-            logger.warning(
-                f"Copied host Gemini credentials ({', '.join(copied)}) to workspace .gemini/. " "Ensure this environment is trusted.",
+            logger.info(
+                f"Copied Gemini home files ({', '.join(copied)}) to workspace .gemini/.",
             )
 
     async def _log_backend_input(self, messages, system_prompt, tools, kwargs):

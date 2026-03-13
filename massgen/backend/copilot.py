@@ -611,6 +611,44 @@ class CopilotBackend(NativeToolBackendMixin, StreamingBufferMixin, LLMBackend):
 
         return _ppm_permission_callback
 
+    def _build_default_native_permission_hooks_config(
+        self,
+        *,
+        agent_id: str | None,
+        working_dir: str,
+    ) -> dict[str, Any]:
+        """Build standalone PRE_TOOL_USE permission hooks for direct backend usage."""
+        adapter = self.get_native_hook_adapter()
+        if adapter is None:
+            return {}
+
+        fm = getattr(self, "filesystem_manager", None)
+        if fm is None:
+            return {}
+
+        ppm = getattr(fm, "path_permission_manager", None)
+        if ppm is None:
+            return {}
+
+        from ..filesystem_manager import PathPermissionManagerHook
+        from ..mcp_tools.hooks import GeneralHookManager, HookType
+
+        manager = GeneralHookManager()
+        manager.register_global_hook(HookType.PRE_TOOL_USE, PathPermissionManagerHook(ppm))
+
+        def context_factory() -> dict[str, Any]:
+            return {
+                "session_id": "",
+                "agent_id": agent_id,
+                "workspace_path": working_dir,
+            }
+
+        return adapter.build_native_hooks_config(
+            manager,
+            agent_id=agent_id,
+            context_factory=context_factory,
+        )
+
     @staticmethod
     def _hash_payload(payload: Any) -> str:
         """Create a deterministic hash for session signature data."""
@@ -949,6 +987,19 @@ class CopilotBackend(NativeToolBackendMixin, StreamingBufferMixin, LLMBackend):
                 )
 
         mcp_servers = self._build_mcp_servers_dict()
+        default_permission_hooks = self._build_default_native_permission_hooks_config(
+            agent_id=agent_id,
+            working_dir=working_dir,
+        )
+        session_hooks = default_permission_hooks
+        if self._native_hook_adapter and self._massgen_hooks_config:
+            session_hooks = self._native_hook_adapter.merge_native_configs(
+                default_permission_hooks,
+                self._massgen_hooks_config,
+            )
+        elif self._massgen_hooks_config:
+            session_hooks = self._massgen_hooks_config
+
         # Collect writable paths for session signature cache invalidation
         writable_paths: list[str] = []
         fm = getattr(self, "filesystem_manager", None)
@@ -997,8 +1048,8 @@ class CopilotBackend(NativeToolBackendMixin, StreamingBufferMixin, LLMBackend):
                 session_config["available_tools"] = available_tools
             if excluded_tools is not None:
                 session_config["excluded_tools"] = excluded_tools
-            if hasattr(self, "_massgen_hooks_config") and self._massgen_hooks_config:
-                session_config["hooks"] = self._massgen_hooks_config
+            if session_hooks:
+                session_config["hooks"] = session_hooks
 
             mcp_names = list(session_config.get("mcp_servers", {}).keys())
             logger.info(f"[Copilot] Creating session for {agent_id} with MCP servers: {mcp_names}")

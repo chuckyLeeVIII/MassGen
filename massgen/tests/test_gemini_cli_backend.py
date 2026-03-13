@@ -518,6 +518,7 @@ class TestBuildExecCommand:
         assert "--approval-mode" in cmd
         assert "default" in cmd
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only: WindowsPath not instantiable on other platforms")
     def test_windows_cmd_wrapper_rewrites_to_direct_node_launch(self, backend, tmp_path):
         """Windows .cmd launch should be rewritten to node + JS entrypoint when available."""
         npm_dir = tmp_path / "npm"
@@ -596,6 +597,12 @@ class TestBuildSubprocessEnv:
         assert env["GOOGLE_API_KEY"] == "my-secret-key"
         assert env["NO_COLOR"] == "1"
 
+    def test_gemini_home_always_set(self, backend):
+        """GEMINI_HOME should always point to workspace .gemini/ dir."""
+        env = backend._build_subprocess_env()
+        assert "GEMINI_HOME" in env
+        assert env["GEMINI_HOME"].endswith(".gemini")
+
     def test_no_api_key(self, backend):
         """Without API key, env should not contain key vars (beyond inherited)."""
         backend.api_key = None
@@ -605,6 +612,7 @@ class TestBuildSubprocessEnv:
         assert env["NO_COLOR"] == "1"
         assert env["PATH"] == "/usr/bin"
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only: WindowsPath not instantiable on other platforms")
     def test_windows_env_adds_node_path_when_missing(self, backend, tmp_path):
         """On Windows, prepend ProgramFiles\nodejs when node is not on PATH."""
         backend.api_key = None
@@ -627,6 +635,7 @@ class TestBuildSubprocessEnv:
         assert env["PATHEXT"] == ".COM;.EXE;.BAT;.CMD"
         assert env["COMSPEC"].lower().endswith("\\system32\\cmd.exe")
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only: WindowsPath not instantiable on other platforms")
     def test_windows_env_keeps_path_when_node_already_resolved(self, backend):
         """Do not prepend node path when node is already resolvable."""
         backend.api_key = None
@@ -1612,16 +1621,37 @@ class TestHooksInSettingsJson:
         settings_path = tmp_path / ".gemini" / "settings.json"
         settings = json.loads(settings_path.read_text())
         assert "hooks" in settings
+        assert "BeforeTool" in settings["hooks"]
         assert "AfterTool" in settings["hooks"]
         assert len(settings["hooks"]["AfterTool"]) == 1
 
-    def test_no_hooks_section_when_no_config(self, backend, tmp_path):
-        """When no hooks config is set, hooks should not appear in settings.json."""
-        backend._config_cwd = str(tmp_path)
-        backend.system_prompt = "test"
+    def test_permission_hooks_written_without_orchestrator(self, tmp_path):
+        """Standalone backend usage should still emit BeforeTool sandbox hooks."""
+        workspace = tmp_path / "workspace"
+        readonly = tmp_path / "readonly"
+        workspace.mkdir()
+        readonly.mkdir()
 
+        with patch.object(GeminiCLIBackend, "_find_gemini_cli", return_value="/usr/bin/gemini"):
+            backend = GeminiCLIBackend(
+                model=GEMINI_CLI_DEFAULT_MODEL,
+                cwd=str(workspace),
+                context_paths=[{"path": str(readonly), "permission": "read"}],
+                context_write_access_enabled=True,
+            )
+
+        backend.system_prompt = "test"
         backend._write_workspace_config()
 
-        settings_path = tmp_path / ".gemini" / "settings.json"
+        settings_path = workspace / ".gemini" / "settings.json"
         settings = json.loads(settings_path.read_text())
-        assert "hooks" not in settings
+        assert "hooks" in settings
+        assert "BeforeTool" in settings["hooks"]
+        assert settings["hooks"]["BeforeTool"]
+
+        manifest_path = workspace / ".gemini" / "permission_manifest.json"
+        assert manifest_path.exists()
+        manifest = json.loads(manifest_path.read_text())
+        managed_paths = manifest["managed_paths"]
+        assert any(entry["path"] == str(workspace.resolve()) and entry["permission"] == "write" for entry in managed_paths)
+        assert any(entry["path"] == str(readonly.resolve()) and entry["permission"] == "read" for entry in managed_paths)

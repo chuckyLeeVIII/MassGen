@@ -5445,6 +5445,7 @@ Your answer:"""
                                 content="",
                             )
                         if result_type == "answer":
+                            result_data = self._coerce_answer_content_to_text(result_data)
                             # Agent provided an answer (initial or improved)
                             agent = self.agents.get(agent_id)
                             # Get the context that was sent to this agent
@@ -5923,7 +5924,9 @@ Your answer:"""
 
             # Update answers for agents that provided them
             for agent_id, answer in answered_agents.items():
-                self.agent_states[agent_id].answer = answer
+                self.agent_states[agent_id].answer = self._coerce_answer_content_to_text(
+                    answer,
+                )
 
             # Update status based on what actions agents took
             for agent_id in completed_agent_ids:
@@ -9205,9 +9208,50 @@ Your answer:"""
             f"[Orchestrator] Set up native hooks for {agent_id}: " f"PreToolUse={len(native_config.get('PreToolUse', []))}, " f"PostToolUse={len(native_config.get('PostToolUse', []))} hooks",
         )
 
+    @classmethod
+    def _coerce_answer_content_to_text(cls, content: Any) -> str:
+        """Normalize heterogeneous answer payloads into plain text."""
+        if content is None:
+            return ""
+
+        if isinstance(content, str):
+            return content
+
+        if isinstance(content, list):
+            parts = [cls._coerce_answer_content_to_text(item).strip() for item in content]
+            return "\n".join(part for part in parts if part)
+
+        if isinstance(content, dict):
+            for key in (
+                "content",
+                "description",
+                "text",
+                "message",
+                "answer",
+                "final_answer",
+                "summary",
+                "output",
+            ):
+                if key not in content:
+                    continue
+                text = cls._coerce_answer_content_to_text(content.get(key)).strip()
+                if text:
+                    return text
+
+            title = cls._coerce_answer_content_to_text(content.get("title")).strip()
+            if title:
+                return title
+
+            try:
+                return json.dumps(content, ensure_ascii=False, sort_keys=True)
+            except TypeError:
+                return str(content)
+
+        return str(content)
+
     def _normalize_workspace_paths_in_answers(
         self,
-        answers: dict[str, str],
+        answers: dict[str, Any],
         viewing_agent_id: str | None = None,
     ) -> dict[str, str]:
         """Normalize absolute workspace paths in agent answers to accessible temporary workspace paths.
@@ -9243,7 +9287,7 @@ Your answer:"""
         agent_mapping = self.coordination_tracker.get_reverse_agent_mapping()
 
         for agent_id, answer in answers.items():
-            normalized_answer = answer
+            normalized_answer = self._coerce_answer_content_to_text(answer)
 
             # Replace all workspace paths found in the answer with accessible paths
             for other_agent_id, other_agent in self.agents.items():
@@ -9275,7 +9319,7 @@ Your answer:"""
 
     def _normalize_workspace_paths_for_comparison(
         self,
-        content: str,
+        content: Any,
         replacement_path: str = "/workspace",
     ) -> str:
         """
@@ -9291,7 +9335,7 @@ Your answer:"""
         Returns:
             Content with all workspace paths normalized to canonical form
         """
-        normalized_content = content
+        normalized_content = self._coerce_answer_content_to_text(content)
 
         # Replace all agent workspace paths with canonical '/workspace/'
         for _, agent in self.agents.items():
@@ -9415,8 +9459,8 @@ Your answer:"""
 
     def _check_answer_novelty(
         self,
-        new_answer: str,
-        existing_answers: dict[str, str],
+        new_answer: Any,
+        existing_answers: dict[str, Any],
     ) -> tuple[bool, str | None]:
         """Check if a new answer is sufficiently different from existing answers.
 
@@ -9445,9 +9489,14 @@ Your answer:"""
                 f"approaches, or tools, or {terminal_action}."
             )
 
+        normalized_new_answer = self._coerce_answer_content_to_text(new_answer)
+
         # Check similarity against all existing answers
         for agent_id, existing_answer in existing_answers.items():
-            similarity = self._calculate_jaccard_similarity(new_answer, existing_answer)
+            similarity = self._calculate_jaccard_similarity(
+                normalized_new_answer,
+                self._coerce_answer_content_to_text(existing_answer),
+            )
             if similarity > threshold:
                 logger.info(
                     f"[Orchestrator] Answer rejected: {similarity:.2%} similar to {agent_id}'s answer (threshold: {threshold:.0%})",
@@ -11939,7 +11988,9 @@ Your answer:"""
                                 continue
 
                             if tool_name == "new_answer":
-                                content = tool_args.get("content", "")
+                                content = self._coerce_answer_content_to_text(
+                                    tool_args.get("content", ""),
+                                )
                                 yield self._trace_tuple(
                                     f'💡 Providing answer: "{content}"',
                                     kind="coordination",
@@ -12537,7 +12588,9 @@ Your answer:"""
                         elif tool_name == "new_answer":
                             workflow_tool_found = True
                             # Agent provided new answer
-                            content = tool_args.get("content", response_text.strip())
+                            content = self._coerce_answer_content_to_text(
+                                tool_args.get("content", response_text.strip()),
+                            )
 
                             # Check answer count limit
                             can_answer, count_error = self._check_answer_count_limit(
@@ -14117,14 +14170,20 @@ INSTRUCTIONS FOR NEXT ATTEMPT:
                         if tool_name == "new_answer":
                             tool_args = agent.backend.extract_tool_arguments(tool_call)
                             if isinstance(tool_args, dict):
-                                submitted_answer = tool_args.get("content", "")
+                                submitted_answer = self._coerce_answer_content_to_text(
+                                    tool_args.get("content", ""),
+                                )
                             elif isinstance(tool_args, str):
                                 import json as _json
 
                                 try:
-                                    submitted_answer = _json.loads(tool_args).get("content", "")
+                                    submitted_answer = self._coerce_answer_content_to_text(
+                                        _json.loads(tool_args).get("content", ""),
+                                    )
                                 except (ValueError, AttributeError):
-                                    submitted_answer = tool_args
+                                    submitted_answer = self._coerce_answer_content_to_text(
+                                        tool_args,
+                                    )
                     # Yield tool calls through so TUI can display them
                     yield StreamChunk(
                         type="tool_calls",
@@ -14155,7 +14214,9 @@ INSTRUCTIONS FOR NEXT ATTEMPT:
                     elif clean_answer_content.strip():
                         final_answer = clean_answer_content.strip()
                     else:
-                        final_answer = self.agent_states[selected_agent_id].answer
+                        final_answer = self._coerce_answer_content_to_text(
+                            self.agent_states[selected_agent_id].answer,
+                        )
                     final_context = self.get_last_context(selected_agent_id)
                     await self._save_agent_snapshot(
                         self._selected_agent,
@@ -14253,7 +14314,13 @@ INSTRUCTIONS FOR NEXT ATTEMPT:
             # Ensure final snapshot is always saved (even if "done" chunk wasn't yielded)
             if not final_snapshot_saved:
                 # Use clean_answer_content (excludes tool calls/results) for answer.txt
-                final_answer = clean_answer_content.strip() if clean_answer_content.strip() else self.agent_states[selected_agent_id].answer
+                final_answer = (
+                    clean_answer_content.strip()
+                    if clean_answer_content.strip()
+                    else self._coerce_answer_content_to_text(
+                        self.agent_states[selected_agent_id].answer,
+                    )
+                )
                 final_context = self.get_last_context(selected_agent_id)
                 await self._save_agent_snapshot(
                     self._selected_agent,
