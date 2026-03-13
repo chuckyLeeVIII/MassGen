@@ -227,7 +227,24 @@ Most configurations use environment variables for API keys:so
 
 ## Release History & Examples
 
-### v0.1.62 - Latest
+### v0.1.63 - Latest
+**New Features:** Ensemble & Contracts
+
+**Key Features:**
+- **Ensemble Pattern Defaults**: `disable_injection` and `defer_voting_until_all_answered` now default to true for ensemble-style subagent orchestration
+- **Transformation Pressure**: Round evaluator pushes agents toward meaningful structural changes
+- **Success Contracts**: Explicit quality gates agents must satisfy before convergence
+- **Lighter Refinement**: Subagents use lighter refinement prompts to reduce token overhead
+- **Killed Agent Handling**: Graceful management of agents that time out or fail mid-round
+
+**Try It:**
+```bash
+pip install massgen==0.1.63
+# Try the round evaluator with ensemble defaults
+uv run massgen --config @examples/features/round_evaluator_example.yaml "Create a polished landing page for an AI product"
+```
+
+### v0.1.62
 **New Features:** MassGen Skill & Viewer
 
 **Key Features:**
@@ -235,18 +252,6 @@ Most configurations use environment variables for API keys:so
 - **Session Viewer**: New `massgen viewer` command for real-time observation of automation sessions with interactive picker and web mode
 - **Backend Improvements**: Claude Code background task execution, Codex native filesystem and MCP support, Copilot runtime model discovery
 - **Quickstart Enhancements**: Headless quickstart for CI/CD, web quickstart for browser-based setup
-- **Evaluation & Planning**: Better planning prompts with thoroughness support, removed should/could criteria
-
-**Try It:**
-```bash
-# Install the MassGen Skill for your AI agent
-npx skills add massgen/skills --all
-# Then in Claude Code, Cursor, Copilot, etc.:
-#   /massgen "Your complex task"
-
-# Try the Session Viewer
-uv run massgen viewer --pick
-```
 
 ### v0.1.61
 **New Features:** Round Evaluator Paradigm

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Recent Releases
 
+**v0.1.63 (March 13, 2026)** - Ensemble & Contracts
+Subagent ensemble pattern with `disable_injection` and `defer_voting_until_all_answered` as defaults. Round evaluator transformation pressure and success contracts. Lighter refinement for subagents. Killed agent handling.
+
 **v0.1.62 (March 11, 2026)** - MassGen Skill & Viewer
 New general-purpose MassGen Skill with 4 modes (general, evaluate, plan, spec) for use from Claude Code and other AI agents. Session viewer for real-time observation. Backend improvements for Claude Code, Codex, and Copilot. Headless and web quickstart modes.
 
@@ -22,6 +25,26 @@ Rewritten read_media with clearer schema and MediaCallLedgerHook for media call 
 Planning improvements with auto-added improvements to task plan and plan review enhancements. Checklist and evaluation enhancements with better eval gen config and Gemini tool name normalization. Subagent behavior adjustments and media generation fixes.
 
 ---
+
+## [0.1.63] - 2026-03-13
+
+### Added
+- **Ensemble Pattern Defaults** ([#996](https://github.com/massgen/MassGen/pull/996)): `disable_injection` and `defer_voting_until_all_answered` now default to true for ensemble-style subagent orchestration
+- **Transformation Pressure** ([#996](https://github.com/massgen/MassGen/pull/996)): Round evaluator applies transformation pressure to push agents toward meaningful structural changes
+- **Success Contracts** ([#996](https://github.com/massgen/MassGen/pull/996)): Explicit quality gates that agents must satisfy before the round evaluator allows convergence
+
+### Changed
+- **Lighter Refinement** ([#996](https://github.com/massgen/MassGen/pull/996)): Subagents use lighter refinement prompts to reduce token overhead and latency
+- **Killed Agent Handling** ([#996](https://github.com/massgen/MassGen/pull/996)): Graceful management of agents that time out or fail mid-round
+- **Verification Replay** ([#996](https://github.com/massgen/MassGen/pull/996)): Evaluation consistency across rounds via replayed verification context
+
+### Fixed
+- **Timeout Fallback** ([#996](https://github.com/massgen/MassGen/pull/996)): More robust coordination when agents hit timeout boundaries
+
+### Technical Details
+- **Major Focus**: Ensemble & Contracts — ensemble pattern defaults, transformation pressure, success contracts, lighter refinement
+- **PRs Merged**: [#996](https://github.com/massgen/MassGen/pull/996) (dev/v0.1.62-p1)
+- **Contributors**: @ncrispino, @HenryQi and the MassGen team
 
 ## [0.1.62] - 2026-03-11
 

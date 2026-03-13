@@ -68,7 +68,7 @@ This project started with the "threads of thought" and "iterative refinement" id
 <details open>
 <summary><h3>🆕 Latest Features</h3></summary>
 
-- [v0.1.62 Features](#-latest-features-v0162)
+- [v0.1.63 Features](#-latest-features-v0163)
 </details>
 
 <details open>
@@ -121,15 +121,15 @@ This project started with the "threads of thought" and "iterative refinement" id
 <details open>
 <summary><h3>🗺️ Roadmap</h3></summary>
 
-- [Recent Achievements (v0.1.62)](#recent-achievements-v0162)
-- [Previous Achievements (v0.0.3 - v0.1.61)](#previous-achievements-v003---v0161)
+- [Recent Achievements (v0.1.63)](#recent-achievements-v0163)
+- [Previous Achievements (v0.0.3 - v0.1.62)](#previous-achievements-v003---v0162)
 - [Key Future Enhancements](#key-future-enhancements)
   - Bug Fixes & Backend Improvements
   - Advanced Agent Collaboration
   - Expanded Model, Tool & Agent Integrations
   - Improved Performance & Scalability
   - Enhanced Developer Experience
-- [v0.1.63 Roadmap](#v0163-roadmap)
+- [v0.1.64 Roadmap](#v0164-roadmap)
 </details>
 
 <details open>
@@ -154,24 +154,20 @@ This project started with the "threads of thought" and "iterative refinement" id
 
 ---
 
-## 🆕 Latest Features (v0.1.62)
+## 🆕 Latest Features (v0.1.63)
 
-**🎉 Released: March 11, 2026**
+**🎉 Released: March 13, 2026**
 
-**What's New in v0.1.62:**
-- **🧩 MassGen Skill** - New general-purpose multi-agent skill with 4 modes (general, evaluate, plan, spec) for Claude Code and other AI agents.
-- **👁️ Session Viewer** - New `massgen viewer` command for real-time observation of automation sessions with interactive picker and web mode.
-- **⚡ Backend & Quickstart** - Claude Code/Codex/Copilot backend improvements, headless and web quickstart modes.
+**What's New in v0.1.63:**
+- **🎯 Ensemble Pattern** - `disable_injection` and `defer_voting_until_all_answered` now default to true for ensemble-style subagent orchestration.
+- **🔄 Round Evaluator Improvements** - Transformation pressure and success contracts for deeper quality assessment.
+- **⚡ Lighter Refinement** - Reduced token overhead for subagent workflows with killed agent handling.
 
-**Try v0.1.62 Features:**
+**Try v0.1.63 Features:**
 ```bash
-# Install the MassGen Skill for your AI agent
-npx skills add massgen/skills --all
-# Then in Claude Code, Cursor, Copilot, etc.:
-#   /massgen "Your complex task"
-
-# Try the Session Viewer
-uv run massgen viewer --pick
+pip install massgen==0.1.63
+# Try the round evaluator with ensemble defaults
+uv run massgen --config @examples/features/round_evaluator_example.yaml "Create a polished landing page for an AI product"
 ```
 
 → [See full release history and examples](massgen/configs/README.md#release-history--examples)
@@ -1243,25 +1239,27 @@ MassGen is currently in its foundational stage, with a focus on parallel, asynch
 
 ⚠️ **Early Stage Notice:** As MassGen is in active development, please expect upcoming breaking architecture changes as we continue to refine and improve the system.
 
-### Recent Achievements (v0.1.62)
+### Recent Achievements (v0.1.63)
 
-**🎉 Released: March 11, 2026**
+**🎉 Released: March 13, 2026**
 
-#### MassGen Skill
-- **General-Purpose Skill** ([#992](https://github.com/massgen/MassGen/pull/992)): New multi-agent skill with 4 modes (general, evaluate, plan, spec) for Claude Code and other AI agents
-- **Auto-Sync**: GitHub Actions workflow to auto-sync skill to separate repository for easy installation
-- **Reference Docs**: Comprehensive workflow guides and prompt templates for each mode
+#### Ensemble Pattern
+- **Ensemble Defaults** ([#996](https://github.com/massgen/MassGen/pull/996)): `disable_injection` and `defer_voting_until_all_answered` now default to true for ensemble-style subagent orchestration
+- **Automatic Ensemble**: Defaults apply when spawning subagent orchestrators without explicit override
 
-#### Session Viewer
-- **Viewer Command** ([#992](https://github.com/massgen/MassGen/pull/992)): New `massgen viewer` for real-time observation of automation sessions
-- **Interactive Picker**: `--pick` flag for session selection, `--web` for browser-based viewing
+#### Round Evaluator Improvements
+- **Transformation Pressure** ([#996](https://github.com/massgen/MassGen/pull/996)): Evaluator pushes agents toward meaningful structural changes rather than surface-level edits
+- **Success Contracts** ([#996](https://github.com/massgen/MassGen/pull/996)): Explicit quality gates agents must satisfy before convergence
+- **Verification Replay**: Evaluation consistency across rounds via replayed verification context
 
-#### Backend & Quickstart
-- **Backend Improvements** ([#992](https://github.com/massgen/MassGen/pull/992)): Claude Code background task execution, Codex native filesystem and MCP support, Copilot runtime model discovery
-- **Quickstart Modes**: Headless quickstart (`--quickstart --headless`) for CI/CD, web quickstart (`--web-quickstart`) for browser-based setup
-- **Evaluation & Planning**: Better planning prompts with thoroughness support, removed should/could criteria
+#### Lighter Refinement & Fixes
+- **Lighter Refinement** ([#996](https://github.com/massgen/MassGen/pull/996)): Subagents use lighter refinement prompts to reduce token overhead and latency
+- **Killed Agent Handling**: Graceful management of agents that time out or fail mid-round
+- **Timeout Fallback**: More robust coordination when agents hit timeout boundaries
 
-### Previous Achievements (v0.0.3 - v0.1.61)
+### Previous Achievements (v0.0.3 - v0.1.62)
+
+✅ **MassGen Skill & Viewer (v0.1.62)**: General-purpose multi-agent skill with 4 modes (general, evaluate, plan, spec) for Claude Code and other AI agents. Session viewer for real-time observation. Backend improvements for Claude Code, Codex, and Copilot. Headless and web quickstart modes.
 
 ✅ **Round Evaluator Paradigm (v0.1.61)**: New round evaluator subagent type that automatically spawns evaluator subagents after each new answer to provide detailed feedback as input to the next round. Major orchestrator refactoring with improved evaluation prompts, task plan injection, and subagent fixes.
 
@@ -1530,13 +1528,12 @@ MassGen is currently in its foundational stage, with a focus on parallel, asynch
 
 We welcome community contributions to achieve these goals.
 
-### v0.1.63 Roadmap
+### v0.1.64 Roadmap
 
-Version 0.1.63 focuses on adding a Gemini CLI backend and image/video editing capabilities:
+Version 0.1.64 focuses on adding a Gemini CLI backend:
 
 #### Planned Features
 - **Gemini CLI Backend** ([#952](https://github.com/massgen/MassGen/issues/952)): Gemini CLI as a first-class backend option
-- **Image/Video Edit Capabilities** ([#959](https://github.com/massgen/MassGen/issues/959)): Check and support image/video editing capabilities across providers
 
 ---
 

@@ -1,10 +1,10 @@
 # MassGen Roadmap
 
-**Current Version:** v0.1.62
+**Current Version:** v0.1.63
 
 **Release Schedule:** Mondays, Wednesdays, Fridays @ 9am PT
 
-**Last Updated:** March 11, 2026
+**Last Updated:** March 13, 2026
 
 This roadmap outlines MassGen's development priorities for upcoming releases. Each release focuses on specific capabilities with real-world use cases.
 
@@ -42,67 +42,29 @@ Want to contribute or collaborate on a specific track? Reach out to the track ow
 
 | Release | Target | Feature | Owner | Use Case |
 |---------|--------|---------|-------|----------|
-| **v0.1.63** | 03/13/26 | Gemini CLI Backend | @ncrispino | Gemini CLI backend support ([#952](https://github.com/massgen/MassGen/issues/952)) |
-| **v0.1.63** | 03/13/26 | Image/Video Edit Capabilities | @ncrispino | Check and support img/video editing capabilities ([#959](https://github.com/massgen/MassGen/issues/959)) |
-| **v0.1.64** | 03/16/26 | OpenAI Audio API | @ncrispino | Support OpenAI audio API for audio understanding ([#960](https://github.com/massgen/MassGen/issues/960)) |
+| **v0.1.64** | 03/16/26 | Gemini CLI Backend | @ncrispino | Gemini CLI backend support ([#952](https://github.com/massgen/MassGen/issues/952)) |
+| **v0.1.65** | 03/18/26 | Image/Video Edit Capabilities | @ncrispino | Check and support img/video editing capabilities ([#959](https://github.com/massgen/MassGen/issues/959)) |
+| **v0.1.66** | 03/20/26 | OpenAI Audio API | @ncrispino | Support OpenAI audio API for audio understanding ([#960](https://github.com/massgen/MassGen/issues/960)) |
 
 *All releases ship on MWF @ 9am PT when ready*
 
 ---
 
-## ✅ v0.1.62 - MassGen Skill & Viewer (Completed)
+## ✅ v0.1.63 - Ensemble & Contracts (Completed)
 
-**Released:** March 11, 2026 | PR: [#992](https://github.com/massgen/MassGen/pull/992)
+**Released:** March 13, 2026 | PR: [#996](https://github.com/massgen/MassGen/pull/996)
 
 ### Features
-- **MassGen Skill**: New general-purpose multi-agent skill with 4 modes (general, evaluate, plan, spec) for Claude Code and other AI agents
-- **Session Viewer**: New `massgen viewer` command for real-time observation of automation sessions with interactive picker and web mode
-- **Backend Improvements**: Claude Code background task execution, Codex native filesystem and MCP support, Copilot runtime model discovery
-- **Quickstart Enhancements**: Headless quickstart (`--quickstart --headless`) for CI/CD, web quickstart (`--web-quickstart`) for browser-based setup
-- **Evaluation & Planning**: Better planning prompts with thoroughness support, removed should/could criteria
+- **Ensemble Pattern Defaults**: `disable_injection` and `defer_voting_until_all_answered` now default to true for ensemble-style subagent orchestration
+- **Transformation Pressure**: Round evaluator applies transformation pressure to push agents toward meaningful structural changes
+- **Success Contracts**: Explicit quality gates that agents must satisfy before the round evaluator allows convergence
+- **Lighter Refinement**: Subagents use lighter refinement prompts to reduce token overhead and latency
+- **Killed Agent Handling**: Graceful management of agents that time out or fail mid-round
+- **Verification Replay**: Evaluation consistency across rounds via replayed verification context
 
 ---
 
-## ✅ v0.1.61 - Round Evaluator Paradigm (Completed)
-
-**Released:** March 9, 2026 | PR: [#986](https://github.com/massgen/MassGen/pull/986)
-
-### Features
-- **Round Evaluator Subagent Type**: New `round_evaluator` subagent type that delegates evaluation to specialized evaluator subagents for deeper quality assessment
-- **Orchestrator Refactoring**: Major orchestrator refactoring (+1,189 lines) to support the round evaluation workflow
-- **Evaluation Improvements**: Improved evaluation prompts with task plan injection for context-aware assessment
-- **New Config**: `round_evaluator_example.yaml` for easy adoption of the round evaluator paradigm
-- **Fixes**: Session resumption from already-resumed logs, SUBAGENT.md generality improvements, round evaluation prompt clarity
-
----
-
-## ✅ v0.1.60 - Multimodal Tools, Subagent Enhancements & GPT-5.4 (Completed)
-
-**Released:** March 6, 2026 | PR: [#978](https://github.com/massgen/MassGen/pull/978)
-
-### Features
-- **Multimodal Tool Improvements**: Rewritten `read_media` with clearer schema, new `MediaCallLedgerHook` for media call tracking
-- **Subagent Enhancements**: `inherit_spawning_agent_backend`, `final_answer_strategy`, per-agent `subagent_agents` override
-- **GPT-5.4 Support**: New default OpenAI flagship model added to the model registry
-- **Decomp Mode Cooperates with Checklist**: Decomposition mode now cooperates with checklist workflow for quality-gated subtask iteration
-- **Fixes**: Checklist/proposal injection improvements, Codex prompt caching calculation fix, task plan refresh, skill prefix handling
-
----
-
-## ✅ v0.1.59 - Quality Round Improvements (Completed)
-
-**Released:** March 4, 2026 | PR: [#969](https://github.com/massgen/MassGen/pull/969)
-
-### Features
-- **Planning Improvements**: Auto-add improvements to task plan, plan review enhancements
-- **Checklist & Evaluation Enhancements**: Better eval gen config, checklist fixes, Gemini tool name normalization for MCP
-- **Subagent Improvements**: Adjusted subagent behavior, subagent manager enhancements, Docker skill write access fixes
-- **Media Generation Fixes**: Video gen skill adjustments (no fallback to animated on errors), video understanding criticality, impact metric restoration
-- **Bug Fixes**: Answer anonymization fix, quickstart and test updates, plan/Docker small fixes
-
----
-
-## 📋 v0.1.63 - Gemini CLI Backend & Image/Video Edit Capabilities
+## 📋 v0.1.64 - Gemini CLI Backend
 
 ### Features
 
@@ -111,20 +73,28 @@ Want to contribute or collaborate on a specific track? Reach out to the track ow
 - Add Gemini CLI as a first-class backend
 - **Use Case**: Enable Gemini CLI as a native backend option alongside Claude Code and Codex
 
-**2. Check Image/Video Edit Capabilities** (@ncrispino)
+### Success Criteria
+- ✅ Gemini CLI backend functional and tested
+
+---
+
+## 📋 v0.1.65 - Image/Video Edit Capabilities
+
+### Features
+
+**1. Check Image/Video Edit Capabilities** (@ncrispino)
 - Issue: [#959](https://github.com/massgen/MassGen/issues/959)
 - Investigate and support image and video editing capabilities across providers
 - Multi-turn editing workflows with continuation IDs
 - **Use Case**: Enable iterative media editing within multi-agent workflows
 
 ### Success Criteria
-- ✅ Gemini CLI backend functional and tested
 - ✅ Image editing capabilities documented and tested
 - ✅ Video editing capabilities documented and tested
 
 ---
 
-## 📋 v0.1.64 - OpenAI Audio API
+## 📋 v0.1.66 - OpenAI Audio API
 
 ### Features
 

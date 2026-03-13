@@ -200,6 +200,10 @@ Key Features
 Recent Releases
 ---------------
 
+**v0.1.63 (March 13, 2026)** - Ensemble & Contracts
+
+Subagent ensemble pattern with ``disable_injection`` and ``defer_voting_until_all_answered`` as defaults. Round evaluator transformation pressure and success contracts. Lighter refinement for subagents. Killed agent handling.
+
 **v0.1.62 (March 11, 2026)** - MassGen Skill & Viewer
 
 New general-purpose MassGen Skill with 4 modes (general, evaluate, plan, spec) for use from Claude Code and other AI agents. Session viewer for real-time observation of automation runs. Backend improvements for Claude Code, Codex, and Copilot. Headless and web quickstart modes for automated setup.
@@ -207,10 +211,6 @@ New general-purpose MassGen Skill with 4 modes (general, evaluate, plan, spec) f
 **v0.1.61 (March 9, 2026)** - Round Evaluator Paradigm
 
 New round evaluator subagent type that delegates evaluation to specialized evaluator subagents for deeper quality assessment. Major orchestrator refactoring with improved evaluation prompts, task plan injection, and subagent fixes.
-
-**v0.1.60 (March 6, 2026)** - Multimodal Tools, Subagent Enhancements & GPT-5.4
-
-Rewritten read_media tool with clearer schema and new MediaCallLedgerHook for media call tracking. Subagent enhancements with inherit_spawning_agent_backend and final_answer_strategy options. GPT-5.4 as default OpenAI flagship. Decomp mode cooperates with checklist workflow. Codex prompt caching calculation fix for pricing accuracy.
 
 :doc:`Full changelog → <changelog>`
 
