@@ -11,8 +11,6 @@ previous_response_id. Sending the full history causes:
 Bug: https://github.com/Leezekun/MassGen/issues/XXX
 """
 
-import pytest
-
 
 class TestPrepareRecursiveMessages:
     """Unit tests for _prepare_recursive_messages helper."""
@@ -39,12 +37,20 @@ class TestPrepareRecursiveMessages:
             {"role": "system", "content": "You are helpful."},
             {"role": "user", "content": "Hello"},
             {"type": "reasoning", "id": "rs_abc123", "content": []},
-            {"type": "function_call", "id": "fc_1", "call_id": "call_1",
-             "name": "read_file", "arguments": "{}"},
+            {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "read_file",
+                "arguments": "{}",
+            },
         ]
         new_items = [
-            {"type": "function_call_output", "call_id": "call_1",
-             "output": "file contents"},
+            {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": "file contents",
+            },
         ]
         all_messages = original_messages + new_items
 
@@ -66,8 +72,11 @@ class TestPrepareRecursiveMessages:
         messages = [
             {"role": "system", "content": "sys"},
             {"role": "user", "content": "hi"},
-            {"type": "function_call_output", "call_id": "c1",
-             "output": "ok"},
+            {
+                "type": "function_call_output",
+                "call_id": "c1",
+                "output": "ok",
+            },
         ]
 
         result = cls._prepare_recursive_messages(
@@ -89,10 +98,16 @@ class TestPrepareRecursiveMessages:
             {"role": "user", "content": "q"},
         ]
         new_items = [
-            {"type": "function_call_output", "call_id": "c1",
-             "output": "result 1"},
-            {"type": "function_call_output", "call_id": "c2",
-             "output": "Error: tool not processed"},
+            {
+                "type": "function_call_output",
+                "call_id": "c1",
+                "output": "result 1",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "c2",
+                "output": "Error: tool not processed",
+            },
         ]
         all_msgs = original + new_items
 
@@ -114,17 +129,33 @@ class TestPrepareRecursiveMessages:
         messages = [
             {"role": "system", "content": "sys"},
             {"type": "reasoning", "id": "rs_first", "content": []},
-            {"type": "function_call", "id": "fc_1", "call_id": "c1",
-             "name": "tool", "arguments": "{}"},
-            {"type": "function_call_output", "call_id": "c1",
-             "output": "ok"},
+            {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "c1",
+                "name": "tool",
+                "arguments": "{}",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "c1",
+                "output": "ok",
+            },
             # Items from a second response also accumulated
             {"type": "reasoning", "id": "rs_second", "content": []},
-            {"type": "function_call", "id": "fc_2", "call_id": "c2",
-             "name": "tool2", "arguments": "{}"},
+            {
+                "type": "function_call",
+                "id": "fc_2",
+                "call_id": "c2",
+                "name": "tool2",
+                "arguments": "{}",
+            },
             # new_items_start_index would be here (6)
-            {"type": "function_call_output", "call_id": "c2",
-             "output": "ok2"},
+            {
+                "type": "function_call_output",
+                "call_id": "c2",
+                "output": "ok2",
+            },
         ]
 
         result = cls._prepare_recursive_messages(
@@ -188,20 +219,27 @@ class TestRecursiveCallIntegration:
 
         # Step 2: response_output_items NOT added because
         # will_use_previous_response_id=True (matches line 598)
-        response_output_items = [
+        # (listed here for documentation; not appended to updated_messages)
+        _response_output_items = [  # noqa: F841
             {"type": "reasoning", "id": "rs_test_001", "content": []},
-            {"type": "function_call", "id": "fc_test_001",
-             "call_id": "call_001", "name": "read_file",
-             "arguments": "{}"},
+            {
+                "type": "function_call",
+                "id": "fc_test_001",
+                "call_id": "call_001",
+                "name": "read_file",
+                "arguments": "{}",
+            },
         ]
         # Skipped (will_use_previous_response_id=True)
 
         # Step 3: tool execution appends function_call_output
-        updated_messages.append({
-            "type": "function_call_output",
-            "call_id": "call_001",
-            "output": "file contents here",
-        })
+        updated_messages.append(
+            {
+                "type": "function_call_output",
+                "call_id": "call_001",
+                "output": "file contents here",
+            },
+        )
 
         # Step 4: prepare for recursive call
         response_id = "resp_001"
@@ -223,9 +261,7 @@ class TestRecursiveCallIntegration:
         assert not any(m.get("role") == "user" for m in result)
 
         # No reasoning items
-        assert not any(
-            m.get("id", "").startswith("rs_") for m in result
-        )
+        assert not any(m.get("id", "").startswith("rs_") for m in result)
 
     def test_simulated_flow_keeps_full_history_without_response_id(self):
         """When response_id is None (first call), the full message
@@ -241,18 +277,27 @@ class TestRecursiveCallIntegration:
         new_items_start_index = len(updated_messages)
 
         # response_output_items added because no previous_response_id
-        updated_messages.extend([
-            {"type": "reasoning", "id": "rs_001", "content": []},
-            {"type": "function_call", "id": "fc_001",
-             "call_id": "c1", "name": "tool", "arguments": "{}"},
-        ])
+        updated_messages.extend(
+            [
+                {"type": "reasoning", "id": "rs_001", "content": []},
+                {
+                    "type": "function_call",
+                    "id": "fc_001",
+                    "call_id": "c1",
+                    "name": "tool",
+                    "arguments": "{}",
+                },
+            ],
+        )
 
         # Tool output added
-        updated_messages.append({
-            "type": "function_call_output",
-            "call_id": "c1",
-            "output": "ok",
-        })
+        updated_messages.append(
+            {
+                "type": "function_call_output",
+                "call_id": "c1",
+                "output": "ok",
+            },
+        )
 
         result = ResponseBackend._prepare_recursive_messages(
             updated_messages,
@@ -280,11 +325,13 @@ class TestRecursiveCallIntegration:
 
         # Three tool outputs from parallel tool execution
         for i in range(3):
-            updated_messages.append({
-                "type": "function_call_output",
-                "call_id": f"call_{i}",
-                "output": f"result_{i}",
-            })
+            updated_messages.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": f"call_{i}",
+                    "output": f"result_{i}",
+                },
+            )
 
         result = ResponseBackend._prepare_recursive_messages(
             updated_messages,
@@ -293,8 +340,6 @@ class TestRecursiveCallIntegration:
         )
 
         assert len(result) == 3
-        assert all(
-            r["type"] == "function_call_output" for r in result
-        )
+        assert all(r["type"] == "function_call_output" for r in result)
         call_ids = {r["call_id"] for r in result}
         assert call_ids == {"call_0", "call_1", "call_2"}

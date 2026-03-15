@@ -23,16 +23,16 @@ class TestNoEmojiInMCPServerCode:
     # Regex matching common emoji ranges that CP1252 cannot encode
     EMOJI_PATTERN = re.compile(
         "["
-        "\U0001F600-\U0001F64F"  # Emoticons
-        "\U0001F300-\U0001F5FF"  # Misc Symbols and Pictographs
-        "\U0001F680-\U0001F6FF"  # Transport and Map
-        "\U0001F1E0-\U0001F1FF"  # Flags
-        "\U00002702-\U000027B0"  # Dingbats
-        "\U0000FE00-\U0000FE0F"  # Variation Selectors
-        "\U00002600-\U000026FF"  # Misc symbols (includes checkmarks)
-        "\U0000200D"             # ZWJ
-        "\U00002B50"             # Star
-        "\U0000231A-\U0000231B"  # Watch/Hourglass
+        "\U0001f600-\U0001f64f"  # Emoticons
+        "\U0001f300-\U0001f5ff"  # Misc Symbols and Pictographs
+        "\U0001f680-\U0001f6ff"  # Transport and Map
+        "\U0001f1e0-\U0001f1ff"  # Flags
+        "\U00002702-\U000027b0"  # Dingbats
+        "\U0000fe00-\U0000fe0f"  # Variation Selectors
+        "\U00002600-\U000026ff"  # Misc symbols (includes checkmarks)
+        "\U0000200d"  # ZWJ
+        "\U00002b50"  # Star
+        "\U0000231a-\U0000231b"  # Watch/Hourglass
         "]+",
     )
 
@@ -64,15 +64,8 @@ class TestNoEmojiInMCPServerCode:
                 continue
 
             # Check print() calls and logger.* calls
-            is_print = (
-                isinstance(node.func, ast.Name)
-                and node.func.id == "print"
-            )
-            is_logger = (
-                isinstance(node.func, ast.Attribute)
-                and isinstance(node.func.value, ast.Name)
-                and node.func.value.id == "logger"
-            )
+            is_print = isinstance(node.func, ast.Name) and node.func.id == "print"
+            is_logger = isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name) and node.func.value.id == "logger"
 
             if not (is_print or is_logger):
                 continue
@@ -80,20 +73,16 @@ class TestNoEmojiInMCPServerCode:
             # Check all string literals in the call's arguments
             for child in ast.walk(node):
                 if isinstance(child, ast.Constant) and isinstance(
-                    child.value, str,
+                    child.value,
+                    str,
                 ):
                     match = self.EMOJI_PATTERN.search(child.value)
                     if match:
                         violations.append(
-                            f"  line {child.lineno}: "
-                            f"emoji '{match.group()}' in "
-                            f"{'print()' if is_print else 'logger.*()'}",
+                            f"  line {child.lineno}: " f"emoji '{match.group()}' in " f"{'print()' if is_print else 'logger.*()'}",
                         )
 
-        assert not violations, (
-            f"Emoji found in {filepath} (will crash on Windows CP1252):\n"
-            + "\n".join(violations)
-        )
+        assert not violations, f"Emoji found in {filepath} (will crash on Windows CP1252):\n" + "\n".join(violations)
 
 
 class TestToolCallErrorMessages:
@@ -102,6 +91,7 @@ class TestToolCallErrorMessages:
     def test_empty_exception_produces_meaningful_error(self):
         """When an exception has an empty str(), the error message
         should still contain the exception type."""
+
         # Simulate the fix: str(e) is empty, fallback to type name
         class SilentError(Exception):
             def __str__(self):
@@ -111,9 +101,7 @@ class TestToolCallErrorMessages:
         error_detail = str(e) or f"{type(e).__name__} (no message)"
 
         assert error_detail == "SilentError (no message)"
-        assert "Tool call failed: SilentError (no message)" == (
-            f"Tool call failed: {error_detail}"
-        )
+        assert "Tool call failed: SilentError (no message)" == (f"Tool call failed: {error_detail}")
 
     def test_normal_exception_preserves_message(self):
         """Normal exceptions with messages are unchanged."""
