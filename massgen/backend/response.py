@@ -705,6 +705,7 @@ class ResponseBackend(StreamingBufferMixin, CustomToolAndMCPBackend):
             # Initialize for execution
             functions_executed = False
             updated_messages = current_messages.copy()
+            new_items_start_index = len(updated_messages)  # Track where new items begin
             processed_call_ids = set()  # Initialize processed_call_ids here
 
             # CRITICAL: Include ALL response output items (reasoning, function_calls, messages)
@@ -912,10 +913,8 @@ class ResponseBackend(StreamingBufferMixin, CustomToolAndMCPBackend):
                     updated_messages.append(error_output_msg)
                     functions_executed = True
 
-            # Trim history after function executions to bound memory usage
+            # Prepare messages for recursive call
             if functions_executed:
-                updated_messages = super()._trim_message_history(updated_messages)
-
                 # Pass response_id for reasoning continuity in recursive call
                 # BUT NOT if we're in compression retry mode - we need to stay stateless
                 # to avoid re-accumulating context that would exceed the window again
@@ -923,6 +922,16 @@ class ResponseBackend(StreamingBufferMixin, CustomToolAndMCPBackend):
                 _compression_retry = kwargs.get("_compression_retry", False)
                 if response_id and not _compression_retry:
                     recursive_kwargs["previous_response_id"] = response_id
+
+                has_prev_resp_id = bool(recursive_kwargs.get("previous_response_id"))
+                if not has_prev_resp_id:
+                    # Trim history to bound memory when sending full context
+                    updated_messages = super()._trim_message_history(updated_messages)
+                updated_messages = self._prepare_recursive_messages(
+                    updated_messages,
+                    new_items_start_index=new_items_start_index,
+                    has_previous_response_id=has_prev_resp_id,
+                )
 
                 # Recursive call with updated messages
                 async for chunk in self._stream_with_custom_and_mcp_tools(updated_messages, tools, client, **recursive_kwargs):
@@ -942,6 +951,34 @@ class ResponseBackend(StreamingBufferMixin, CustomToolAndMCPBackend):
             )
             yield TextStreamChunk(type=ChunkType.DONE, source="response_api")
             return
+
+    @staticmethod
+    def _prepare_recursive_messages(
+        messages: list[dict[str, Any]],
+        new_items_start_index: int,
+        has_previous_response_id: bool,
+    ) -> list[dict[str, Any]]:
+        """Prepare messages for the next recursive API call.
+
+        When ``previous_response_id`` is active, the server-side response
+        chain already includes all prior context (system prompt, user
+        messages, reasoning items, prior function_call / function_call_output
+        pairs).  Sending the full accumulated history again causes the API
+        to reject the request with:
+
+            400 - Duplicate item found with id rs_XXXX
+
+        To prevent this, only items that were appended *after* the current
+        response (i.e. ``function_call_output`` items from tool executions
+        in this iteration) are kept.
+
+        When ``previous_response_id`` is **not** used (first call or
+        compression-retry), the full message list is returned unchanged
+        so the caller can apply its own trimming.
+        """
+        if has_previous_response_id:
+            return messages[new_items_start_index:]
+        return messages
 
     async def _upload_files_and_create_vector_store(
         self,
