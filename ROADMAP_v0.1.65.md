@@ -4,24 +4,24 @@
 
 ## Overview
 
-Version 0.1.65 focuses on investigating and supporting image/video editing capabilities across providers.
+Version 0.1.65 focuses on running MassGen as a cloud job on Modal.
 
 ---
 
-## Feature: Image/Video Edit Capabilities
+## Feature: Cloud Modal MVP
 
-**Issue:** [#959](https://github.com/massgen/MassGen/issues/959)
+**Issue:** [#982](https://github.com/massgen/MassGen/issues/982)
 **Owner:** @ncrispino
 
 ### Goals
 
-- **Image/Video Editing**: Check and support image/video editing capabilities across providers
-- Multi-turn editing workflows with continuation IDs
+- **Cloud Execution**: Run MassGen jobs in the cloud via `--cloud` option on Modal
+- Progress streams to terminal, results saved locally under `.massgen/cloud_jobs/`
 
 ### Success Criteria
 
-- [ ] Image editing capabilities verified and supported
-- [ ] Video editing capabilities verified and supported
+- [ ] Cloud job execution functional on Modal
+- [ ] Progress streaming and artifact extraction working
 
 ---
 

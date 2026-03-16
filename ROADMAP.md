@@ -42,8 +42,9 @@ Want to contribute or collaborate on a specific track? Reach out to the track ow
 
 | Release | Target | Feature | Owner | Use Case |
 |---------|--------|---------|-------|----------|
-| **v0.1.65** | 03/18/26 | Image/Video Edit Capabilities | @ncrispino | Check and support img/video editing capabilities ([#959](https://github.com/massgen/MassGen/issues/959)) |
+| **v0.1.65** | 03/18/26 | Cloud Modal MVP | @ncrispino | Run MassGen as a cloud job on Modal ([#982](https://github.com/massgen/MassGen/issues/982)) |
 | **v0.1.66** | 03/20/26 | OpenAI Audio API | @ncrispino | Support OpenAI audio API for audio understanding ([#960](https://github.com/massgen/MassGen/issues/960)) |
+| **v0.1.67** | 03/23/26 | Image/Video Edit Capabilities | @ncrispino | Check and support img/video editing capabilities ([#959](https://github.com/massgen/MassGen/issues/959)) |
 
 *All releases ship on MWF @ 9am PT when ready*
 
@@ -62,33 +63,19 @@ Want to contribute or collaborate on a specific track? Reach out to the track ow
 
 ---
 
-## ✅ v0.1.63 - Ensemble & Contracts (Completed)
-
-**Released:** March 13, 2026 | PR: [#996](https://github.com/massgen/MassGen/pull/996)
-
-### Features
-- **Ensemble Pattern Defaults**: `disable_injection` and `defer_voting_until_all_answered` now default to true for ensemble-style subagent orchestration
-- **Transformation Pressure**: Round evaluator applies transformation pressure to push agents toward meaningful structural changes
-- **Success Contracts**: Explicit quality gates that agents must satisfy before the round evaluator allows convergence
-- **Lighter Refinement**: Subagents use lighter refinement prompts to reduce token overhead and latency
-- **Killed Agent Handling**: Graceful management of agents that time out or fail mid-round
-- **Verification Replay**: Evaluation consistency across rounds via replayed verification context
-
----
-
-## 📋 v0.1.65 - Image/Video Edit Capabilities
+## 📋 v0.1.65 - Cloud Modal MVP
 
 ### Features
 
-**1. Check Image/Video Edit Capabilities** (@ncrispino)
-- Issue: [#959](https://github.com/massgen/MassGen/issues/959)
-- Investigate and support image and video editing capabilities across providers
-- Multi-turn editing workflows with continuation IDs
-- **Use Case**: Enable iterative media editing within multi-agent workflows
+**1. Cloud Modal MVP** (@ncrispino)
+- Issue: [#982](https://github.com/massgen/MassGen/issues/982)
+- Run MassGen jobs in the cloud via `--cloud` option on Modal
+- Progress streams to terminal, results saved locally under `.massgen/cloud_jobs/`
+- **Use Case**: Run multi-agent tasks in the cloud without local GPU/resource constraints
 
 ### Success Criteria
-- ✅ Image editing capabilities documented and tested
-- ✅ Video editing capabilities documented and tested
+- ✅ Cloud job execution functional on Modal
+- ✅ Progress streaming and artifact extraction working
 
 ---
 
@@ -105,6 +92,22 @@ Want to contribute or collaborate on a specific track? Reach out to the track ow
 ### Success Criteria
 - ✅ OpenAI audio API working via `read_media`
 - ✅ Audio understanding integrated into multi-agent workflows
+
+---
+
+## 📋 v0.1.67 - Image/Video Edit Capabilities
+
+### Features
+
+**1. Check Image/Video Edit Capabilities** (@ncrispino)
+- Issue: [#959](https://github.com/massgen/MassGen/issues/959)
+- Investigate and support image and video editing capabilities across providers
+- Multi-turn editing workflows with continuation IDs
+- **Use Case**: Enable iterative media editing within multi-agent workflows
+
+### Success Criteria
+- ✅ Image editing capabilities documented and tested
+- ✅ Video editing capabilities documented and tested
 
 ---
 

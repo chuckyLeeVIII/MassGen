@@ -1530,10 +1530,10 @@ We welcome community contributions to achieve these goals.
 
 ### v0.1.65 Roadmap
 
-Version 0.1.65 focuses on image/video editing capabilities:
+Version 0.1.65 focuses on cloud execution:
 
 #### Planned Features
-- **Image/Video Edit Capabilities** ([#959](https://github.com/massgen/MassGen/issues/959)): Check and support image/video editing capabilities across providers
+- **Cloud Modal MVP** ([#982](https://github.com/massgen/MassGen/issues/982)): Run MassGen as a cloud job on Modal
 
 ---
 
