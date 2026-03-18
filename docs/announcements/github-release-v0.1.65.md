@@ -1,6 +1,6 @@
 # 🚀 Release Highlights — v0.1.65 (2026-03-18)
 
-### 🔧 MassGen Refinery Plugin
+### 🔧 [MassGen Refinery Plugin](https://github.com/massgen/massgen-refinery)
 Standalone MCP servers that bring MassGen's quality gates and multi-round workflows to Claude Code — no full orchestrator needed. Single-agent refinement is fully working; multi-agent coordination is experimental.
 
 ### ✅ [Quality Server](https://github.com/massgen/MassGen/blob/main/massgen/mcp_tools/standalone/quality_server.py) (`massgen_quality_tools`)
