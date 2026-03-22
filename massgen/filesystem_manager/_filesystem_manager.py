@@ -2339,6 +2339,11 @@ class FilesystemManager:
             _safe_rmtree(self.agent_temporary_workspace)
         self.agent_temporary_workspace.mkdir(parents=True, exist_ok=True)
 
+        # Framework metadata dirs to exclude from temp workspace copies.
+        # These contain agent IDs in filenames/content and backend-identifying
+        # artifacts — agents don't need them for evaluating others' work.
+        _snapshot_exclude_dirs = {".massgen", ".codex", ".gemini", ".claude", ".git"}
+
         # Copy all snapshots using anonymous IDs
         for agent_id, snapshot_path in all_snapshots.items():
             if snapshot_path.exists() and snapshot_path.is_dir():
@@ -2356,11 +2361,17 @@ class FilesystemManager:
                         dirs_exist_ok=True,
                         symlinks=True,
                         ignore_dangling_symlinks=True,
+                        ignore=shutil.ignore_patterns(*_snapshot_exclude_dirs),
                     )
                     self._normalize_media_call_ledger_paths(
                         source_snapshot_root=snapshot_path,
                         temp_snapshot_root=dest_dir,
                     )
+
+                    # Scrub remaining agent IDs from framework metadata files
+                    from ._path_rewriter import scrub_agent_ids_in_snapshot
+
+                    scrub_agent_ids_in_snapshot(dest_dir, agent_mapping)
 
         return self.agent_temporary_workspace
 

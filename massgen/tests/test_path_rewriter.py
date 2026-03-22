@@ -9,9 +9,12 @@ import os
 import time
 from pathlib import Path
 
+import pytest
+
 from massgen.filesystem_manager._path_rewriter import (
     _SCAN_DIRS,
     replace_stale_paths_in_workspace,
+    scrub_agent_ids_in_snapshot,
 )
 
 # ---------------------------------------------------------------------------
@@ -293,3 +296,251 @@ class TestStepModePathRewriting:
         ws_dest = str(step_dir / "workspace")
         assert stale_path not in content
         assert ws_dest in content
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for scrub_agent_ids_in_snapshot
+# ---------------------------------------------------------------------------
+
+
+class TestScrubAgentIdsInSnapshot:
+    """Unit tests for scrubbing real agent IDs from snapshot copies."""
+
+    def test_renames_verification_memory_files(self, tmp_path: Path) -> None:
+        """Files like verification_latest__agent_a.md get renamed to anon ID."""
+        _make_framework_file(
+            tmp_path,
+            "memory/short_term/verification_latest__agent_a.md",
+            "some verification content",
+        )
+        mapping = {"agent_a": "agent1"}
+
+        count = scrub_agent_ids_in_snapshot(tmp_path, mapping)
+
+        assert count > 0
+        assert not (tmp_path / "memory/short_term/verification_latest__agent_a.md").exists()
+        assert (tmp_path / "memory/short_term/verification_latest__agent1.md").exists()
+        assert (tmp_path / "memory/short_term/verification_latest__agent1.md").read_text() == "some verification content"
+
+    def test_replaces_agent_id_in_plan_json(self, tmp_path: Path) -> None:
+        """Content in tasks/ dir has real agent IDs replaced."""
+        _make_framework_file(
+            tmp_path,
+            "tasks/plan.json",
+            '{"assigned_to": "agent_a", "delegated_by": "agent_b"}',
+        )
+        mapping = {"agent_a": "agent1", "agent_b": "agent2"}
+
+        scrub_agent_ids_in_snapshot(tmp_path, mapping)
+
+        result = (tmp_path / "tasks/plan.json").read_text()
+        assert "agent_a" not in result
+        assert "agent_b" not in result
+        assert "agent1" in result
+        assert "agent2" in result
+
+    def test_replaces_agent_id_in_execution_trace(self, tmp_path: Path) -> None:
+        """Root-level execution_trace.md gets scrubbed."""
+        _make_framework_file(
+            tmp_path,
+            "execution_trace.md",
+            "## Round 1\nagent_a submitted answer\nagent_b voted",
+        )
+        mapping = {"agent_a": "agent1", "agent_b": "agent2"}
+
+        count = scrub_agent_ids_in_snapshot(tmp_path, mapping)
+
+        assert count > 0
+        result = (tmp_path / "execution_trace.md").read_text()
+        assert "agent_a" not in result
+        assert "agent_b" not in result
+
+    def test_replaces_agent_id_in_memory_files(self, tmp_path: Path) -> None:
+        """Content in memory/ dir has real agent IDs replaced."""
+        _make_framework_file(
+            tmp_path,
+            "memory/short_term/notes.md",
+            "Observed agent_c's approach was strong",
+        )
+        mapping = {"agent_c": "agent3"}
+
+        scrub_agent_ids_in_snapshot(tmp_path, mapping)
+
+        result = (tmp_path / "memory/short_term/notes.md").read_text()
+        assert "agent_c" not in result
+        assert "agent3" in result
+
+    def test_does_not_touch_deliverable_files(self, tmp_path: Path) -> None:
+        """Root-level README.md (a deliverable) is NOT modified."""
+        _make_framework_file(
+            tmp_path,
+            "README.md",
+            "Created by agent_a with love",
+        )
+        # Need at least one framework file so the function runs
+        _make_framework_file(tmp_path, "memory/note.md", "clean")
+
+        scrub_agent_ids_in_snapshot(tmp_path, {"agent_a": "agent1"})
+
+        result = (tmp_path / "README.md").read_text()
+        assert "agent_a" in result  # Unchanged
+
+    def test_does_not_touch_deliverable_subdirs(self, tmp_path: Path) -> None:
+        """Files in deliverable/ subdirectory are NOT modified."""
+        _make_framework_file(
+            tmp_path,
+            "deliverable/report.md",
+            "agent_a analysis results",
+        )
+        _make_framework_file(tmp_path, "memory/note.md", "clean")
+
+        scrub_agent_ids_in_snapshot(tmp_path, {"agent_a": "agent1"})
+
+        result = (tmp_path / "deliverable/report.md").read_text()
+        assert "agent_a" in result  # Unchanged
+
+    def test_multiple_agent_ids_replaced(self, tmp_path: Path) -> None:
+        """All 3 agent IDs in one file are replaced."""
+        content = "agent_a scored 9, agent_b scored 7, agent_c scored 8"
+        _make_framework_file(tmp_path, "memory/eval.md", content)
+
+        mapping = {"agent_a": "agent1", "agent_b": "agent2", "agent_c": "agent3"}
+        scrub_agent_ids_in_snapshot(tmp_path, mapping)
+
+        result = (tmp_path / "memory/eval.md").read_text()
+        assert "agent_a" not in result
+        assert "agent_b" not in result
+        assert "agent_c" not in result
+        assert "agent1" in result
+        assert "agent2" in result
+        assert "agent3" in result
+
+    def test_longest_first_prevents_partial_match(self, tmp_path: Path) -> None:
+        """agent_ab is replaced before agent_a to prevent partial corruption."""
+        content = "agent_ab did well, agent_a did okay"
+        _make_framework_file(tmp_path, "memory/eval.md", content)
+
+        mapping = {"agent_a": "agent1", "agent_ab": "agent2"}
+        scrub_agent_ids_in_snapshot(tmp_path, mapping)
+
+        result = (tmp_path / "memory/eval.md").read_text()
+        assert "agent2 did well" in result
+        assert "agent1 did okay" in result
+
+    def test_empty_mapping_is_noop(self, tmp_path: Path) -> None:
+        """Empty mapping returns 0 without error."""
+        _make_framework_file(tmp_path, "memory/note.md", "agent_a content")
+
+        count = scrub_agent_ids_in_snapshot(tmp_path, {})
+
+        assert count == 0
+
+    def test_nonexistent_root_returns_zero(self, tmp_path: Path) -> None:
+        """Non-existent root path returns 0 without error."""
+        count = scrub_agent_ids_in_snapshot(
+            tmp_path / "nonexistent",
+            {"agent_a": "agent1"},
+        )
+        assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for copytree exclusion of framework dirs
+# ---------------------------------------------------------------------------
+
+
+class TestCopytreeExcludesFrameworkDirs:
+    """Verify copy_snapshots_to_temp_workspace excludes framework metadata dirs."""
+
+    @staticmethod
+    def _create_snapshot_with_framework_dirs(snapshot_path: Path) -> None:
+        """Create a snapshot dir with deliverables + framework dirs."""
+        # Deliverables
+        (snapshot_path / "answer.md").write_text("My answer")
+        (snapshot_path / "deliverable").mkdir()
+        (snapshot_path / "deliverable" / "report.txt").write_text("Report content")
+        # tasks/ and memory/ (framework but needed for evaluation)
+        (snapshot_path / "tasks").mkdir()
+        (snapshot_path / "tasks" / "plan.json").write_text("{}")
+        (snapshot_path / "memory").mkdir()
+        (snapshot_path / "memory" / "notes.md").write_text("Notes")
+        # Framework dirs that should be excluded
+        (snapshot_path / ".massgen").mkdir()
+        (snapshot_path / ".massgen" / "agent_a_coordination_config.json").write_text("{}")
+        (snapshot_path / ".codex").mkdir()
+        (snapshot_path / ".codex" / "config.toml").write_text("backend=codex")
+        (snapshot_path / ".gemini").mkdir()
+        (snapshot_path / ".gemini" / "settings.json").write_text("{}")
+        (snapshot_path / ".claude").mkdir()
+        (snapshot_path / ".claude" / "settings.json").write_text("{}")
+        (snapshot_path / ".git").mkdir()
+        (snapshot_path / ".git" / "HEAD").write_text("ref: refs/heads/main")
+
+    @pytest.mark.asyncio
+    async def test_copytree_excludes_massgen_dir(self, tmp_path: Path) -> None:
+        """`.massgen/` should not appear in the temp workspace copy."""
+        from massgen.filesystem_manager._filesystem_manager import FilesystemManager
+
+        snapshot_path = tmp_path / "snapshots" / "agent_a"
+        snapshot_path.mkdir(parents=True)
+        self._create_snapshot_with_framework_dirs(snapshot_path)
+
+        fm = FilesystemManager(cwd=str(tmp_path / "workspace"))
+        fm.agent_temporary_workspace = tmp_path / "temp"
+        fm.agent_temporary_workspace.mkdir()
+
+        await fm.copy_snapshots_to_temp_workspace(
+            {"agent_a": snapshot_path},
+            {"agent_a": "agent1"},
+        )
+
+        dest = tmp_path / "temp" / "agent1"
+        assert not (dest / ".massgen").exists()
+
+    @pytest.mark.asyncio
+    async def test_copytree_excludes_codex_dir(self, tmp_path: Path) -> None:
+        """`.codex/` should not appear in the temp workspace copy."""
+        from massgen.filesystem_manager._filesystem_manager import FilesystemManager
+
+        snapshot_path = tmp_path / "snapshots" / "agent_a"
+        snapshot_path.mkdir(parents=True)
+        self._create_snapshot_with_framework_dirs(snapshot_path)
+
+        fm = FilesystemManager(cwd=str(tmp_path / "workspace"))
+        fm.agent_temporary_workspace = tmp_path / "temp"
+        fm.agent_temporary_workspace.mkdir()
+
+        await fm.copy_snapshots_to_temp_workspace(
+            {"agent_a": snapshot_path},
+            {"agent_a": "agent1"},
+        )
+
+        dest = tmp_path / "temp" / "agent1"
+        assert not (dest / ".codex").exists()
+        assert not (dest / ".gemini").exists()
+        assert not (dest / ".claude").exists()
+        assert not (dest / ".git").exists()
+
+    @pytest.mark.asyncio
+    async def test_copytree_preserves_deliverables(self, tmp_path: Path) -> None:
+        """Deliverable dirs and framework-needed dirs survive the copy."""
+        from massgen.filesystem_manager._filesystem_manager import FilesystemManager
+
+        snapshot_path = tmp_path / "snapshots" / "agent_a"
+        snapshot_path.mkdir(parents=True)
+        self._create_snapshot_with_framework_dirs(snapshot_path)
+
+        fm = FilesystemManager(cwd=str(tmp_path / "workspace"))
+        fm.agent_temporary_workspace = tmp_path / "temp"
+        fm.agent_temporary_workspace.mkdir()
+
+        await fm.copy_snapshots_to_temp_workspace(
+            {"agent_a": snapshot_path},
+            {"agent_a": "agent1"},
+        )
+
+        dest = tmp_path / "temp" / "agent1"
+        assert (dest / "answer.md").exists()
+        assert (dest / "deliverable" / "report.txt").exists()
+        assert (dest / "tasks" / "plan.json").exists()
+        assert (dest / "memory" / "notes.md").exists()

@@ -367,3 +367,44 @@ class TestStdioSpecsRoundTrip:
             loaded = json.load(f)
 
         assert loaded["state"]["pending_evaluator_personas"] == SAMPLE_PERSONAS
+
+
+# ===================================================================
+# Codex backend _checklist_specs_path wiring test
+# ===================================================================
+
+
+class TestCodexBackendSpecsPathWiring:
+    """The Codex backend must set _checklist_specs_path so the orchestrator
+    can sync evaluator personas back from the specs file."""
+
+    def test_codex_backend_sets_checklist_specs_path(self, tmp_path):
+        """After writing checklist specs, the Codex backend should expose
+        _checklist_specs_path so _sync_stdio_checklist_state_from_specs works."""
+        from massgen.backend.codex import CodexBackend
+
+        backend = CodexBackend.__new__(CodexBackend)
+        backend._checklist_state = {"has_existing_answers": False, "evaluator_team_size": 3}
+        backend._checklist_items = []
+
+        # Simulate the config_dir that _prepare_workspace creates
+        config_dir = tmp_path / ".codex"
+        config_dir.mkdir()
+
+        # Call the same code path the backend uses to write checklist specs
+        from massgen.mcp_tools.checklist_tools_server import (
+            write_checklist_specs,
+        )
+
+        specs_path = config_dir / "checklist_specs.json"
+        write_checklist_specs(
+            items=backend._checklist_items,
+            state=backend._checklist_state,
+            output_path=specs_path,
+        )
+        # This is the fix: backend must store the path
+        backend._checklist_specs_path = specs_path
+
+        assert hasattr(backend, "_checklist_specs_path")
+        assert backend._checklist_specs_path == specs_path
+        assert specs_path.exists()

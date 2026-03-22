@@ -2316,6 +2316,16 @@ class Orchestrator(ChatAgent):
         for agent_id, agent in self.agents.items():
             self._inject_planning_tools_for_agent(agent_id, agent)
 
+    def _planning_server_name(self, agent_id: str) -> str:
+        """Return the anonymous MCP server name for this agent's planning tools."""
+        token = self.coordination_tracker.get_path_token(agent_id)
+        return f"planning_{token}"
+
+    def _subagent_server_name(self, agent_id: str) -> str:
+        """Return the anonymous MCP server name for this agent's subagent tools."""
+        token = self.coordination_tracker.get_path_token(agent_id)
+        return f"subagent_{token}"
+
     def _inject_planning_tools_for_agent(self, agent_id: str, agent: Any) -> None:
         """
         Inject planning MCP tools into a specific agent.
@@ -2342,7 +2352,7 @@ class Orchestrator(ChatAgent):
         if isinstance(mcp_servers, dict):
             # Claude Code dict format
             logger.info("[Orchestrator] Using dict format for MCP servers")
-            mcp_servers[f"planning_{agent_id}"] = planning_mcp_config
+            mcp_servers[self._planning_server_name(agent_id)] = planning_mcp_config
         else:
             # Standard list format
             logger.info("[Orchestrator] Using list format for MCP servers")
@@ -2586,7 +2596,7 @@ class Orchestrator(ChatAgent):
         logger.info(f"[Orchestrator] Planning MCP args for {agent_id}: {args}")
 
         config = {
-            "name": f"planning_{agent_id}",
+            "name": self._planning_server_name(agent_id),
             "type": "stdio",
             "command": "fastmcp",
             "args": args,
@@ -2675,7 +2685,7 @@ class Orchestrator(ChatAgent):
         if isinstance(mcp_servers, dict):
             # Claude Code dict format
             logger.info("[Orchestrator] Using dict format for MCP servers")
-            mcp_servers[f"subagent_{agent_id}"] = subagent_mcp_config
+            mcp_servers[self._subagent_server_name(agent_id)] = subagent_mcp_config
         else:
             # Standard list format
             logger.info("[Orchestrator] Using list format for MCP servers")
@@ -2915,10 +2925,14 @@ class Orchestrator(ChatAgent):
                 agent_cfg["subagent_agents"] = json.loads(json.dumps(subagent_agents))
             agent_configs.append(agent_cfg)
 
+        # Use anonymous token for config filenames (defense-in-depth against
+        # agent ID leaks if .massgen/ exclusion is bypassed).
+        _token = self.coordination_tracker.get_path_token(agent_id)
+
         # Write agent configs to a deterministic file to avoid command line
-        # length limits.  Deterministic names (keyed by agent_id) prevent
+        # length limits.  Deterministic names (keyed by token) prevent
         # accumulation across runs — each run simply overwrites.
-        agent_configs_path = str(mcp_temp_dir / f"{agent_id}_agent_configs.json")
+        agent_configs_path = str(mcp_temp_dir / f"{_token}_agent_configs.json")
         with open(agent_configs_path, "w") as f:
             json.dump(agent_configs, f)
 
@@ -2932,7 +2946,7 @@ class Orchestrator(ChatAgent):
                 parent_context_paths = agent.backend.config.get("context_paths", [])
 
         if parent_context_paths:
-            context_paths_path = str(mcp_temp_dir / f"{agent_id}_context_paths.json")
+            context_paths_path = str(mcp_temp_dir / f"{_token}_context_paths.json")
             with open(context_paths_path, "w") as f:
                 json.dump(parent_context_paths, f)
             logger.info(
@@ -2944,7 +2958,7 @@ class Orchestrator(ChatAgent):
         if hasattr(self.config, "coordination_config") and self.config.coordination_config:
             parent_coordination_config = self._build_parent_coordination_config_for_subagents()
             if parent_coordination_config:
-                coordination_config_path = str(mcp_temp_dir / f"{agent_id}_coordination_config.json")
+                coordination_config_path = str(mcp_temp_dir / f"{_token}_coordination_config.json")
                 with open(coordination_config_path, "w") as f:
                     json.dump(parent_coordination_config, f)
                 logger.info(
@@ -2983,7 +2997,7 @@ class Orchestrator(ChatAgent):
                     # Keep a file-based copy to avoid escaped JSON argument parsing
                     # inconsistencies across MCP runtimes.
                     subagent_orchestrator_config_path = str(
-                        mcp_temp_dir / f"{agent_id}_orchestrator_config.json",
+                        mcp_temp_dir / f"{_token}_orchestrator_config.json",
                     )
                     with open(subagent_orchestrator_config_path, "w") as f:
                         json.dump(so_payload, f)
@@ -3139,7 +3153,7 @@ class Orchestrator(ChatAgent):
             mcp_env = agent.backend._build_custom_tools_mcp_env()
 
         config: dict[str, Any] = {
-            "name": f"subagent_{agent_id}",
+            "name": self._subagent_server_name(agent_id),
             "type": "stdio",
             "command": "fastmcp",
             "args": args,
@@ -7515,7 +7529,7 @@ Your answer:"""
         # Find the planning MCP tool name for this agent
         planning_tool_name = None
         for tool_name in agent.backend._mcp_functions.keys():
-            if "clear_task_plan" in tool_name and f"planning_{agent_id}" in tool_name:
+            if "clear_task_plan" in tool_name and self._planning_server_name(agent_id) in tool_name:
                 planning_tool_name = tool_name
                 break
 
@@ -9149,7 +9163,7 @@ Your answer:"""
         if not agent:
             return None
 
-        full_tool_name = f"mcp__subagent_{parent_agent_id}__{tool_name}"
+        full_tool_name = f"mcp__{self._subagent_server_name(parent_agent_id)}__{tool_name}"
         backend = getattr(agent, "backend", None)
         error_messages: list[str] = []
         attempted_path = False
@@ -11433,6 +11447,8 @@ Your answer:"""
         mcp_temp_dir = PathlibPath(workspace_root) / ".massgen" / "subagent_mcp"
         mcp_temp_dir.mkdir(parents=True, exist_ok=True)
 
+        _token = self.coordination_tracker.get_path_token(agent_id)
+
         try:
             # agent_configs.json
             agent_configs = []
@@ -11446,7 +11462,7 @@ Your answer:"""
                 if isinstance(subagent_agents, list) and subagent_agents:
                     agent_cfg["subagent_agents"] = json.loads(json.dumps(subagent_agents))
                 agent_configs.append(agent_cfg)
-            with open(mcp_temp_dir / f"{agent_id}_agent_configs.json", "w") as f:
+            with open(mcp_temp_dir / f"{_token}_agent_configs.json", "w") as f:
                 json.dump(agent_configs, f)
 
             # coordination_config.json
@@ -11454,14 +11470,14 @@ Your answer:"""
             if coord_cfg:
                 parent_coordination_config = self._build_parent_coordination_config_for_subagents()
                 if parent_coordination_config:
-                    with open(mcp_temp_dir / f"{agent_id}_coordination_config.json", "w") as f:
+                    with open(mcp_temp_dir / f"{_token}_coordination_config.json", "w") as f:
                         json.dump(parent_coordination_config, f)
 
             # orchestrator_config.json
             if coord_cfg:
                 so_cfg = getattr(coord_cfg, "subagent_orchestrator", None)
                 if so_cfg:
-                    with open(mcp_temp_dir / f"{agent_id}_orchestrator_config.json", "w") as f:
+                    with open(mcp_temp_dir / f"{_token}_orchestrator_config.json", "w") as f:
                         json.dump(so_cfg.to_dict(), f)
 
             logger.info(
@@ -11725,7 +11741,7 @@ Your answer:"""
                 tool_id=tool_call_id,
                 tool_name="spawn_subagents",
                 args=args,
-                server_name=f"subagent_{agent_id}",
+                server_name=self._subagent_server_name(agent_id),
             )
             return
 
@@ -13890,6 +13906,13 @@ Your answer:"""
                 if not _notified_round and not _mid_stream_injection:
                     _notified_round = True
                     self.agent_states[agent_id].restart_count += 1
+                    # Reset per-round checklist budget so the agent can
+                    # evaluate from scratch on this new round.  Without
+                    # this, an agent restarted mid-improvement (after
+                    # submit_checklist but before new_answer) carries a
+                    # stale counter and gets blocked from submitting.
+                    self.agent_states[agent_id].checklist_calls_this_round = 0
+                    self.agent_states[agent_id].pending_checklist_recheck_labels = set()
                     current_round = self.agent_states[agent_id].restart_count
 
                     # If this is a restart (round > 1), notify the UI to show fresh timeline
@@ -18385,10 +18408,10 @@ Then call either submit(confirmed=True) if the answer is satisfactory, or restar
                 f"[Orchestrator] Failed to archive memories for {agent_id}: {e}",
             )
 
-    @staticmethod
-    def _namespace_verification_memory_files(archive_path: Path, agent_id: str) -> None:
+    def _namespace_verification_memory_files(self, archive_path: Path, agent_id: str) -> None:
         """Namespace verification_latest memories so per-agent files never collide."""
-        namespaced_name = f"verification_latest__{agent_id}.md"
+        token = self.coordination_tracker.get_path_token(agent_id)
+        namespaced_name = f"verification_latest__{token}.md"
         for tier in ("short_term", "long_term"):
             tier_dir = archive_path / tier
             if not tier_dir.exists():

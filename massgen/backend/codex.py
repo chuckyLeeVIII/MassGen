@@ -863,6 +863,8 @@ class CodexBackend(StreamingBufferMixin, NativeToolBackendMixin, LLMBackend):
                 state=self._checklist_state,
                 output_path=specs_path,
             )
+            # Store path so orchestrator can sync state back (e.g. evaluator personas)
+            self._checklist_specs_path = specs_path
             checklist_mcp = build_checklist_config(specs_path, hook_dir=self.get_hook_dir())
             # Replace any previous checklist entry
             self.mcp_servers = [s for s in self.mcp_servers if not (isinstance(s, dict) and s.get("name") == "massgen_checklist")]

@@ -107,22 +107,36 @@ class SubagentHeader(Horizontal):
         self,
         subagent: SubagentDisplayData,
         *,
+        multi: bool = False,
         id: str | None = None,
     ) -> None:
         super().__init__(id=id)
         self._subagent = subagent
+        self._multi = multi
 
     def compose(self) -> ComposeResult:
         yield Button("← Back", classes="back-button", id="back_btn")
+        yield Static(self._build_title(), classes="subagent-title", id="header_title")
+
+    def _build_title(self) -> str:
+        if self._multi:
+            return "Preparation"
         label = getattr(self._subagent, "subagent_type", None) or self._subagent.id
-        yield Static(f"Subagent: {label}", classes="subagent-title", id="header_title")
+        return f"Subagent: {label}"
+
+    def set_multi(self, multi: bool) -> None:
+        """Mark this header as part of a multi-tab view."""
+        self._multi = multi
+        try:
+            self.query_one("#header_title", Static).update(self._build_title())
+        except Exception:
+            pass
 
     def update_subagent(self, subagent: SubagentDisplayData) -> None:
         """Update the header for a new subagent."""
         self._subagent = subagent
         try:
-            label = getattr(subagent, "subagent_type", None) or subagent.id
-            self.query_one("#header_title", Static).update(f"Subagent: {label}")
+            self.query_one("#header_title", Static).update(self._build_title())
         except Exception as e:
             tui_log(f"[SubagentScreen] {e}")
 
@@ -592,6 +606,7 @@ class SubagentPanel(Container, BaseTUILayoutMixin):
         self._subagent = subagent
         self._ribbon = ribbon
         self._active_timeline_id: str | None = None
+        self._id_prefix: str = ""
 
         # Per-inner-agent task plan hosts (created in mount_agent_timelines)
         from massgen.frontend.displays.textual_widgets.task_plan_host import (
@@ -604,6 +619,18 @@ class SubagentPanel(Container, BaseTUILayoutMixin):
 
         # Initialize content pipeline from mixin
         self.init_content_pipeline()
+
+    def _timeline_id(self, agent_id: str) -> str:
+        """Build a namespaced timeline widget ID."""
+        if self._id_prefix:
+            return f"subagent-timeline-{self._id_prefix}-{agent_id}"
+        return f"subagent-timeline-{agent_id}"
+
+    def _task_plan_id(self, agent_id: str) -> str:
+        """Build a namespaced task-plan widget ID."""
+        if self._id_prefix:
+            return f"subagent-task-plan-{self._id_prefix}-{agent_id}"
+        return f"subagent-task-plan-{agent_id}"
 
     @property
     def _task_plan_host(self):
@@ -624,8 +651,11 @@ class SubagentPanel(Container, BaseTUILayoutMixin):
     # Multi-timeline management
     # -------------------------------------------------------------------------
 
-    def mount_agent_timelines(self, agent_ids: list[str]) -> None:
+    def mount_agent_timelines(self, agent_ids: list[str], *, prefix: str = "") -> None:
         """Mount one timeline and one TaskPlanHost per inner agent. All start hidden except the first."""
+        # Update ID prefix so _timeline_id / _task_plan_id use the new namespace.
+        self._id_prefix = prefix
+
         # Remove any existing timelines and task plan hosts first
         for tl in list(self.query(TimelineSection)):
             tl.remove()
@@ -649,7 +679,7 @@ class SubagentPanel(Container, BaseTUILayoutMixin):
 
         for i, aid in enumerate(unique_ids):
             # Mount TaskPlanHost per agent (skip if ID still in DOM from pending async removal)
-            tph_id = f"subagent-task-plan-{aid}"
+            tph_id = self._task_plan_id(aid)
             try:
                 self.query_one(f"#{tph_id}")
             except Exception:
@@ -663,8 +693,8 @@ class SubagentPanel(Container, BaseTUILayoutMixin):
                 self._task_plan_hosts[aid] = tph
                 self.mount(tph)
 
-            # Mount timeline per agent (skip if ID still in DOM)
-            widget_id = f"subagent-timeline-{aid}"
+            # Mount timeline per agent (skip if namespaced ID already in DOM)
+            widget_id = self._timeline_id(aid)
             try:
                 self.query_one(f"#{widget_id}")
                 continue
@@ -676,12 +706,12 @@ class SubagentPanel(Container, BaseTUILayoutMixin):
             self.mount(tl)
 
         if unique_ids:
-            self._active_timeline_id = f"subagent-timeline-{unique_ids[0]}"
+            self._active_timeline_id = self._timeline_id(unique_ids[0])
             self._active_task_plan_agent = unique_ids[0]
 
     def switch_timeline(self, agent_id: str) -> None:
         """Show one timeline and task plan host, hide the rest."""
-        new_id = f"subagent-timeline-{agent_id}"
+        new_id = self._timeline_id(agent_id)
         if new_id == self._active_timeline_id:
             return
         # Hide current timeline
@@ -976,7 +1006,8 @@ class SubagentView(Container):
         agent_models: dict[str, str] = {}  # Would come from config
 
         # Header with back button
-        yield SubagentHeader(self._subagent, id="subagent-header")
+        has_tabs = len(self._all_subagents) > 1
+        yield SubagentHeader(self._subagent, multi=has_tabs, id="subagent-header")
 
         # Top-level subagent selector (only if multiple subagents)
         if len(self._all_subagents) > 1:
@@ -1157,7 +1188,7 @@ class SubagentView(Container):
 
         # Mount one timeline per inner agent
         if self._panel:
-            self._panel.mount_agent_timelines(self._inner_agents)
+            self._panel.mount_agent_timelines(self._inner_agents, prefix=self._subagent.id)
 
         # Load events for the first (default) agent
         if self._current_inner_agent:
@@ -1555,7 +1586,7 @@ class SubagentView(Container):
             return
         try:
             timeline = self._panel.query_one(
-                f"#subagent-timeline-{agent_id}",
+                f"#{self._panel._timeline_id(agent_id)}",
                 TimelineSection,
             )
         except Exception:
@@ -1584,7 +1615,7 @@ class SubagentView(Container):
 
         try:
             timeline = self._panel.query_one(
-                f"#subagent-timeline-{agent_id}",
+                f"#{self._panel._timeline_id(agent_id)}",
                 TimelineSection,
             )
         except Exception:
@@ -1828,7 +1859,7 @@ class SubagentView(Container):
 
             # Mount new timelines and load first agent
             if self._panel:
-                self._panel.mount_agent_timelines(self._inner_agents)
+                self._panel.mount_agent_timelines(self._inner_agents, prefix=self._subagent.id)
             if self._current_inner_agent:
                 self._load_events_for_agent(self._current_inner_agent)
                 self._agents_loaded.add(self._current_inner_agent)
@@ -1908,7 +1939,7 @@ class SubagentView(Container):
 
         # Create adapter for this agent if needed
         if aid not in self._event_adapters:
-            proxy = _AgentTimelineProxy(self._panel, f"subagent-timeline-{aid}")
+            proxy = _AgentTimelineProxy(self._panel, self._panel._timeline_id(aid))
             self._event_adapters[aid] = TimelineEventAdapter(proxy, agent_id=aid)
 
         adapter = self._event_adapters[aid]
@@ -1944,7 +1975,7 @@ class SubagentView(Container):
         if not self._panel:
             return
 
-        timeline_id = f"subagent-timeline-{agent_id}"
+        timeline_id = self._panel._timeline_id(agent_id)
         try:
             timeline = self._panel.query_one(f"#{timeline_id}", TimelineSection)
         except Exception:
@@ -2265,7 +2296,7 @@ class SubagentView(Container):
         for agent_id in unique_agents:
             try:
                 timeline = self._panel.query_one(
-                    f"#subagent-timeline-{agent_id}",
+                    f"#{self._panel._timeline_id(agent_id)}",
                     TimelineSection,
                 )
             except Exception:
