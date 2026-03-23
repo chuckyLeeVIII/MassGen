@@ -59,6 +59,18 @@ class TimeoutConfig:
 
 
 @dataclass
+class PromptImproverConfig:
+    """Configuration for pre-collab prompt improvement.
+
+    When enabled, spawns a multi-agent consensus call before coordination
+    to rewrite the user's task prompt for clarity, specificity, and ambition.
+    """
+
+    enabled: bool = False
+    persist_across_turns: bool = False
+
+
+@dataclass
 class CoordinationConfig:
     """Configuration for coordination behavior in MassGen.
 
@@ -205,6 +217,9 @@ class CoordinationConfig:
     evaluation_criteria_generator: EvaluationCriteriaGeneratorConfig = field(
         default_factory=EvaluationCriteriaGeneratorConfig,
     )
+    prompt_improver: PromptImproverConfig = field(
+        default_factory=PromptImproverConfig,
+    )
     pre_collab_voting_threshold: int | None = None
     enable_subagents: bool = False
     subagent_default_timeout: int = 300
@@ -232,6 +247,7 @@ class CoordinationConfig:
     enable_quality_rethink_on_iteration: bool = False  # Auto-inject quality_rethinking spawn task on iteration 2+
     enable_novelty_on_iteration: bool = False  # Auto-inject novelty/quality spawn task on iteration 2+
     enable_execution_trace_analyzer: bool = False  # Run execution_trace_analyzer in parallel with round_evaluator
+    enable_evaluator_personas: bool = False  # Expose set_evaluator_personas tool for agent-driven evaluator diversity
     novelty_injection: str = "none"  # "none" | "gentle" | "moderate" | "aggressive"
     improvements: dict[str, Any] = field(default_factory=dict)  # Quality gate config for propose_improvements
     checklist_criteria_preset: str | None = None  # "persona" | "decomposition" | "evaluation" | "prompt" | "analysis" | "planning" | "spec" | "round_evaluator"
