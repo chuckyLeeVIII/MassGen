@@ -194,6 +194,7 @@ export interface HookExecutionInfo {
   reason?: string;
   execution_time_ms?: number;
   injection_preview?: string;
+  injection_content?: string;
 }
 
 export interface HookExecutionEvent extends WSMessage {
@@ -389,6 +390,11 @@ export interface SessionInfo {
   question?: string;
   status?: 'active' | 'completed';
   completed_at?: number;
+  config?: string;
+  config_path?: string;
+  models?: string[];
+  start_time?: string;
+  log_dir?: string;
 }
 
 // ============================================================================

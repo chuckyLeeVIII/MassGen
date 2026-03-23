@@ -273,6 +273,13 @@ class CoordinationTracker:
         """
         return self._path_tokens.get(agent_id, secrets.token_hex(4))
 
+    def regenerate_path_tokens(self) -> None:
+        """Regenerate anonymous path tokens for all agents.
+
+        Call at round start so tokens can't be correlated across rounds.
+        """
+        self._path_tokens = {agent_id: secrets.token_hex(4) for agent_id in self._path_tokens}
+
     def _get_agent_number(self, agent_id: str) -> int | None:
         """Get the 1-based number for an agent (1, 2, 3, etc.).
 
