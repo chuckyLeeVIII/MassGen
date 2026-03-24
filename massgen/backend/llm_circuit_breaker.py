@@ -64,7 +64,7 @@ class LLMCircuitBreakerConfig:
     reset_time_seconds: int = 60
     backoff_multiplier: float = 2.0
     max_backoff_seconds: float = 300.0
-    retry_after_threshold_seconds: float = 60.0
+    retry_after_threshold_seconds: float = 120.0
     retryable_status_codes: list[int] = field(
         default_factory=lambda: [500, 502, 503, 529],
     )

@@ -156,7 +156,7 @@ class TestLLMCircuitBreakerConfig:
         cfg = LLMCircuitBreakerConfig()
         assert cfg.enabled is False
         assert cfg.max_failures == 5
-        assert cfg.retry_after_threshold_seconds == 60.0
+        assert cfg.retry_after_threshold_seconds == 120.0
 
     def test_invalid_max_failures(self):
         with pytest.raises(ValueError, match="max_failures"):
