@@ -24,7 +24,6 @@ from typing import Any
 
 from ..logger_config import log_backend_activity
 
-
 # ---------------------------------------------------------------------------
 # 429 classification
 # ---------------------------------------------------------------------------
@@ -88,8 +87,7 @@ class LLMCircuitBreakerConfig:
             )
         if self.retry_after_threshold_seconds < 0:
             raise ValueError(
-                f"retry_after_threshold_seconds must be >= 0, "
-                f"got {self.retry_after_threshold_seconds}",
+                f"retry_after_threshold_seconds must be >= 0, " f"got {self.retry_after_threshold_seconds}",
             )
 
 
@@ -381,8 +379,7 @@ class LLMCircuitBreaker:
                     if action == RateLimitAction.STOP:
                         # Quota exhaustion -- open CB, do not retry
                         self.force_open(
-                            f"429 STOP: Retry-After={retry_after}s > "
-                            f"threshold={self.config.retry_after_threshold_seconds}s",
+                            f"429 STOP: Retry-After={retry_after}s > " f"threshold={self.config.retry_after_threshold_seconds}s",
                         )
                         raise
 
@@ -456,9 +453,7 @@ class LLMCircuitBreaker:
 
     def _log(self, message: str, **details: Any) -> None:
         """Log via structured backend activity logger."""
-        log_details: dict[str, Any] = {
-            k: v for k, v in details.items() if v is not None
-        }
+        log_details: dict[str, Any] = {k: v for k, v in details.items() if v is not None}
         log_backend_activity(
             self.backend_name,
             message,
@@ -470,11 +465,7 @@ class LLMCircuitBreaker:
         with self._lock:
             state = self._state.value
             failures = self._failure_count
-        return (
-            f"LLMCircuitBreaker(state={state}, "
-            f"failures={failures}/{self.config.max_failures}, "
-            f"backend={self.backend_name!r})"
-        )
+        return f"LLMCircuitBreaker(state={state}, " f"failures={failures}/{self.config.max_failures}, " f"backend={self.backend_name!r})"
 
 
 # ---------------------------------------------------------------------------
