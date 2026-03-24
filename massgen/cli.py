@@ -2155,6 +2155,11 @@ def create_backend(backend_type: str, **kwargs) -> Any:
     # Extract config path for error messages (and remove it from kwargs so it doesn't interfere)
     config_path = kwargs.pop("_config_path", None)
 
+    def _stamp(backend, btype: str):
+        """Stamp backend with its type string for later recreation (e.g., checkpoint fresh agents)."""
+        backend._backend_type = btype
+        return backend
+
     # Check if this is a framework/adapter type
     from massgen.adapters import adapter_registry
 
@@ -2162,7 +2167,7 @@ def create_backend(backend_type: str, **kwargs) -> Any:
         # Use ExternalAgentBackend for all registered adapter types
         from massgen.backend.external import ExternalAgentBackend
 
-        return ExternalAgentBackend(adapter_type=backend_type, **kwargs)
+        return _stamp(ExternalAgentBackend(adapter_type=backend_type, **kwargs), backend_type)
 
     if backend_type == "openai":
         api_key = kwargs.get("api_key") or os.getenv("OPENAI_API_KEY")
@@ -2170,7 +2175,7 @@ def create_backend(backend_type: str, **kwargs) -> Any:
             raise ConfigurationError(
                 _api_key_error_message("OpenAI", "OPENAI_API_KEY", config_path),
             )
-        return ResponseBackend(api_key=api_key, **kwargs)
+        return _stamp(ResponseBackend(api_key=api_key, **kwargs), "openai")
 
     elif backend_type == "grok":
         api_key = kwargs.get("api_key") or os.getenv("XAI_API_KEY")
@@ -2178,7 +2183,7 @@ def create_backend(backend_type: str, **kwargs) -> Any:
             raise ConfigurationError(
                 _api_key_error_message("Grok", "XAI_API_KEY", config_path),
             )
-        return GrokBackend(api_key=api_key, **kwargs)
+        return _stamp(GrokBackend(api_key=api_key, **kwargs), "grok")
 
     elif backend_type == "claude":
         api_key = kwargs.get("api_key") or os.getenv("ANTHROPIC_API_KEY")
@@ -2186,7 +2191,7 @@ def create_backend(backend_type: str, **kwargs) -> Any:
             raise ConfigurationError(
                 _api_key_error_message("Claude", "ANTHROPIC_API_KEY", config_path),
             )
-        return ClaudeBackend(api_key=api_key, **kwargs)
+        return _stamp(ClaudeBackend(api_key=api_key, **kwargs), "claude")
 
     elif backend_type == "gemini":
         api_key = kwargs.get("api_key") or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
@@ -2194,11 +2199,11 @@ def create_backend(backend_type: str, **kwargs) -> Any:
             raise ConfigurationError(
                 _api_key_error_message("Gemini", "GOOGLE_API_KEY", config_path),
             )
-        return GeminiBackend(api_key=api_key, **kwargs)
+        return _stamp(GeminiBackend(api_key=api_key, **kwargs), "gemini")
 
     elif backend_type == "copilot":
         # Copilot uses local auth via SDK, no API key required here
-        return CopilotBackend(api_key="copilot-local", **kwargs)
+        return _stamp(CopilotBackend(api_key="copilot-local", **kwargs), "copilot")
 
     elif backend_type == "chatcompletion":
         api_key = kwargs.get("api_key")
@@ -2294,7 +2299,7 @@ def create_backend(backend_type: str, **kwargs) -> Any:
                         "Qwen API key not found. Set QWEN_API_KEY environment variable.\n" "You can add it to a .env file in:\n" "  - Current directory: .env\n" "  - Global config: ~/.massgen/.env",
                     )
 
-        return ChatCompletionsBackend(api_key=api_key, **kwargs)
+        return _stamp(ChatCompletionsBackend(api_key=api_key, **kwargs), "chatcompletion")
 
     elif backend_type == "zai":
         # ZAI (Zhipu.ai) uses OpenAI-compatible Chat Completions at a custom base_url
@@ -2304,7 +2309,7 @@ def create_backend(backend_type: str, **kwargs) -> Any:
             raise ConfigurationError(
                 "ZAI API key not found. Set ZAI_API_KEY environment variable.\n" "You can add it to a .env file in:\n" "  - Current directory: .env\n" "  - Global config: ~/.massgen/.env",
             )
-        return ChatCompletionsBackend(api_key=api_key, **kwargs)
+        return _stamp(ChatCompletionsBackend(api_key=api_key, **kwargs), "zai")
 
     elif backend_type == "cerebras":
         # Cerebras AI uses OpenAI-compatible Chat Completions API
@@ -2315,7 +2320,7 @@ def create_backend(backend_type: str, **kwargs) -> Any:
             )
         if "base_url" not in kwargs:
             kwargs["base_url"] = "https://api.cerebras.ai/v1"
-        return ChatCompletionsBackend(api_key=api_key, **kwargs)
+        return _stamp(ChatCompletionsBackend(api_key=api_key, **kwargs), "cerebras")
 
     elif backend_type == "together":
         # Together AI uses OpenAI-compatible Chat Completions API
@@ -2326,7 +2331,7 @@ def create_backend(backend_type: str, **kwargs) -> Any:
             )
         if "base_url" not in kwargs:
             kwargs["base_url"] = "https://api.together.xyz/v1"
-        return ChatCompletionsBackend(api_key=api_key, **kwargs)
+        return _stamp(ChatCompletionsBackend(api_key=api_key, **kwargs), "together")
 
     elif backend_type == "fireworks":
         # Fireworks AI uses OpenAI-compatible Chat Completions API
@@ -2341,7 +2346,7 @@ def create_backend(backend_type: str, **kwargs) -> Any:
             )
         if "base_url" not in kwargs:
             kwargs["base_url"] = "https://api.fireworks.ai/inference/v1"
-        return ChatCompletionsBackend(api_key=api_key, **kwargs)
+        return _stamp(ChatCompletionsBackend(api_key=api_key, **kwargs), "fireworks")
 
     elif backend_type == "groq":
         # Groq uses OpenAI-compatible Chat Completions API
@@ -2352,7 +2357,7 @@ def create_backend(backend_type: str, **kwargs) -> Any:
             )
         if "base_url" not in kwargs:
             kwargs["base_url"] = "https://api.groq.com/openai/v1"
-        return ChatCompletionsBackend(api_key=api_key, **kwargs)
+        return _stamp(ChatCompletionsBackend(api_key=api_key, **kwargs), "groq")
 
     elif backend_type == "openrouter":
         # OpenRouter uses OpenAI-compatible Chat Completions API
@@ -2363,7 +2368,7 @@ def create_backend(backend_type: str, **kwargs) -> Any:
             )
         if "base_url" not in kwargs:
             kwargs["base_url"] = "https://openrouter.ai/api/v1"
-        return ChatCompletionsBackend(api_key=api_key, **kwargs)
+        return _stamp(ChatCompletionsBackend(api_key=api_key, **kwargs), "openrouter")
 
     elif backend_type == "moonshot":
         # Kimi/Moonshot AI uses OpenAI-compatible Chat Completions API
@@ -2374,7 +2379,7 @@ def create_backend(backend_type: str, **kwargs) -> Any:
             )
         if "base_url" not in kwargs:
             kwargs["base_url"] = "https://api.moonshot.cn/v1"
-        return ChatCompletionsBackend(api_key=api_key, **kwargs)
+        return _stamp(ChatCompletionsBackend(api_key=api_key, **kwargs), "moonshot")
 
     elif backend_type == "nvidia_nim":
         # Nvidia NIM uses OpenAI-compatible Chat Completions API
@@ -2385,7 +2390,7 @@ def create_backend(backend_type: str, **kwargs) -> Any:
             )
         if "base_url" not in kwargs:
             kwargs["base_url"] = "https://integrate.api.nvidia.com/v1"
-        return ChatCompletionsBackend(api_key=api_key, **kwargs)
+        return _stamp(ChatCompletionsBackend(api_key=api_key, **kwargs), "nvidia_nim")
 
     elif backend_type == "nebius":
         # Nebius AI Studio uses OpenAI-compatible Chat Completions API
@@ -2400,7 +2405,7 @@ def create_backend(backend_type: str, **kwargs) -> Any:
             )
         if "base_url" not in kwargs:
             kwargs["base_url"] = "https://api.studio.nebius.ai/v1"
-        return ChatCompletionsBackend(api_key=api_key, **kwargs)
+        return _stamp(ChatCompletionsBackend(api_key=api_key, **kwargs), "nebius")
 
     elif backend_type == "poe":
         # POE uses OpenAI-compatible Chat Completions API
@@ -2410,7 +2415,7 @@ def create_backend(backend_type: str, **kwargs) -> Any:
                 _api_key_error_message("POE", "POE_API_KEY", config_path),
             )
         # base_url must be provided in config as it's platform-specific
-        return ChatCompletionsBackend(api_key=api_key, **kwargs)
+        return _stamp(ChatCompletionsBackend(api_key=api_key, **kwargs), "poe")
 
     elif backend_type == "qwen":
         # Qwen uses OpenAI-compatible Chat Completions API
@@ -2421,19 +2426,19 @@ def create_backend(backend_type: str, **kwargs) -> Any:
             )
         if "base_url" not in kwargs:
             kwargs["base_url"] = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-        return ChatCompletionsBackend(api_key=api_key, **kwargs)
+        return _stamp(ChatCompletionsBackend(api_key=api_key, **kwargs), "qwen")
 
     elif backend_type == "lmstudio":
         # LM Studio local server (OpenAI-compatible). Defaults handled by backend.
-        return LMStudioBackend(**kwargs)
+        return _stamp(LMStudioBackend(**kwargs), "lmstudio")
 
     elif backend_type == "vllm":
         # vLLM local server (OpenAI-compatible). Defaults handled by backend.
-        return InferenceBackend(backend_type="vllm", **kwargs)
+        return _stamp(InferenceBackend(backend_type="vllm", **kwargs), "vllm")
 
     elif backend_type == "sglang":
         # SGLang local server (OpenAI-compatible). Defaults handled by backend.
-        return InferenceBackend(backend_type="sglang", **kwargs)
+        return _stamp(InferenceBackend(backend_type="sglang", **kwargs), "sglang")
 
     elif backend_type == "claude_code":
         # ClaudeCodeBackend using claude-code-sdk-python
@@ -2447,21 +2452,21 @@ def create_backend(backend_type: str, **kwargs) -> Any:
                 "claude-code-sdk not found. Install with: pip install claude-code-sdk",
             )
 
-        return ClaudeCodeBackend(**kwargs)
+        return _stamp(ClaudeCodeBackend(**kwargs), "claude_code")
 
     elif backend_type == "codex":
         # CodexBackend using OpenAI Codex CLI subprocess wrapper
         # Authentication: API key (OPENAI_API_KEY) or ChatGPT OAuth
         # Requires: npm install -g @openai/codex
 
-        return CodexBackend(**kwargs)
+        return _stamp(CodexBackend(**kwargs), "codex")
 
     elif backend_type == "gemini_cli":
         # GeminiCLIBackend using Google Gemini CLI subprocess wrapper
         # Authentication: CLI login (gemini) or GOOGLE_API_KEY/GEMINI_API_KEY
         # Requires: npm install -g @google/gemini-cli
 
-        return GeminiCLIBackend(**kwargs)
+        return _stamp(GeminiCLIBackend(**kwargs), "gemini_cli")
 
     elif backend_type == "azure_openai":
         api_key = kwargs.get("api_key") or os.getenv("AZURE_OPENAI_API_KEY")
@@ -2478,7 +2483,7 @@ def create_backend(backend_type: str, **kwargs) -> Any:
             raise ConfigurationError(
                 "Azure OpenAI endpoint not found. Set AZURE_OPENAI_ENDPOINT or provide base_url in config.",
             )
-        return AzureOpenAIBackend(**kwargs)
+        return _stamp(AzureOpenAIBackend(**kwargs), "azure_openai")
 
     else:
         raise ConfigurationError(f"Unsupported backend type: {backend_type}")
@@ -3965,14 +3970,26 @@ async def run_question_with_history(
 
     # Detect main_agent for checkpoint coordination mode
     # MCP injection is handled by orchestrator._init_checkpoint_tool() in __init__
+    _ckpt_main_agent_id = None
     raw_agents_for_checkpoint = kwargs.get("agents_config", [])
     if isinstance(raw_agents_for_checkpoint, list):
         for agent_data in raw_agents_for_checkpoint:
             if isinstance(agent_data, dict) and agent_data.get("main_agent") is True:
-                main_agent_id = agent_data.get("id")
-                if main_agent_id and main_agent_id in agents:
-                    orchestrator.set_main_agent(main_agent_id)
+                _ckpt_main_agent_id = agent_data.get("id")
                 break
+
+    # Fallback: if checkpoint is enabled but no main_agent is set,
+    # default to the first agent
+    if not _ckpt_main_agent_id:
+        if getattr(orchestrator_config, "coordination_config", None) and getattr(
+            orchestrator_config.coordination_config,
+            "checkpoint_enabled",
+            False,
+        ):
+            _ckpt_main_agent_id = sorted(agents.keys())[0] if agents else None
+
+    if _ckpt_main_agent_id and _ckpt_main_agent_id in agents:
+        orchestrator.set_main_agent(_ckpt_main_agent_id)
 
     # Parse per-agent subtask assignments for decomposition mode
     if orchestrator_config.coordination_mode == "decomposition":

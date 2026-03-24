@@ -851,6 +851,48 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         }
         break;
 
+      // Handle structured_event for checkpoint_activated (dynamic agent registration)
+      case 'structured_event' as string: {
+        const se = event as unknown as {
+          event_type: string;
+          data: Record<string, unknown>;
+        };
+        if (se.event_type === 'checkpoint_activated') {
+          const participants = (se.data.participants as Record<string, { real_agent_id: string; model: string }>) || {};
+          const currentAgents = { ...get().agents };
+          const currentOrder = [...get().agentOrder];
+          const currentUIState = { ...get().agentUIState };
+
+          for (const [displayId, info] of Object.entries(participants)) {
+            if (!currentAgents[displayId]) {
+              currentAgents[displayId] = createAgentState(displayId, info.model || undefined);
+              currentUIState[displayId] = createAgentUIState();
+              if (!currentOrder.includes(displayId)) {
+                // Insert after real agent in order
+                const realIdx = currentOrder.indexOf(info.real_agent_id);
+                if (realIdx >= 0) {
+                  currentOrder.splice(realIdx + 1, 0, displayId);
+                } else {
+                  currentOrder.push(displayId);
+                }
+              }
+            }
+          }
+
+          // Mark the main agent as "completed" so it stops showing "Generating"
+          const mainAgentId = (se.data.main_agent_id as string) || '';
+          if (mainAgentId && currentAgents[mainAgentId]) {
+            currentAgents[mainAgentId] = {
+              ...currentAgents[mainAgentId],
+              status: 'completed' as AgentStatus,
+            };
+          }
+
+          set({ agents: currentAgents, agentOrder: currentOrder, agentUIState: currentUIState });
+        }
+        break;
+      }
+
       case 'agent_content':
         if ('agent_id' in event && 'content' in event) {
           store.updateAgentContent(

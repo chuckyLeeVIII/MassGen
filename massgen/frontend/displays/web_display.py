@@ -52,6 +52,9 @@ class WebDisplay(BaseDisplay):
         # Sequence number for ordering events
         self._sequence = 0
 
+        # Checkpoint mode: only show main agent initially
+        self._main_agent_id: str | None = kwargs.get("main_agent_id")
+
         # Track state for visualization
         self._vote_distribution: dict[str, int] = {}
         self._vote_targets: dict[str, str] = {}  # agent_id -> voted_for
@@ -232,13 +235,22 @@ class WebDisplay(BaseDisplay):
         except Exception:
             pass  # Silently ignore if logger not configured
 
+        # In checkpoint mode, only show the main agent initially.
+        # Other agents appear when checkpoint_activated fires.
+        if self._main_agent_id:
+            init_agents = [self._main_agent_id]
+            init_models = {k: v for k, v in self.agent_models.items() if k == self._main_agent_id}
+        else:
+            init_agents = self.agent_ids
+            init_models = self.agent_models
+
         self._emit(
             "init",
             {
                 "question": question,
                 "log_filename": log_filename,
-                "agents": self.agent_ids,
-                "agent_models": self.agent_models,
+                "agents": init_agents,
+                "agent_models": init_models,
                 "theme": self.theme,
             },
         )

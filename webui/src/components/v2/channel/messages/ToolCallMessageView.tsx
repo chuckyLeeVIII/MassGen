@@ -11,6 +11,8 @@ export function ToolCallMessageView({ message }: ToolCallMessageViewProps) {
   const [expanded, setExpanded] = useState(false);
 
   const isPending = message.result === undefined;
+  const isCheckpoint = message.toolName === 'mcp__massgen_checkpoint__checkpoint'
+    || message.toolName === 'checkpoint';
 
   const elapsedStr = message.elapsed
     ? message.elapsed > 1000
@@ -19,6 +21,48 @@ export function ToolCallMessageView({ message }: ToolCallMessageViewProps) {
     : null;
 
   const filePath = extractFilePath(message.args);
+
+  // Special rendering for checkpoint delegation
+  if (isCheckpoint) {
+    const task = (message.args.task as string) || '';
+    const evalCriteria = (message.args.eval_criteria as string[]) || [];
+    return (
+      <div className="px-4 py-1">
+        <div className="rounded-lg border border-blue-500/30 bg-blue-500/5 overflow-hidden">
+          <div className="flex items-center gap-2 px-3 py-2">
+            <span className="text-base">📋</span>
+            <span className="text-xs font-semibold text-blue-400 uppercase tracking-wide">
+              Checkpoint Delegation
+            </span>
+            {isPending && (
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse shrink-0" />
+            )}
+            {!isPending && (
+              <span className="w-1.5 h-1.5 rounded-full bg-v2-online shrink-0" />
+            )}
+            <div className="flex-1" />
+            {elapsedStr && (
+              <span className="text-xs text-v2-text-muted">{elapsedStr}</span>
+            )}
+          </div>
+          <div className="px-3 pb-2">
+            <p className="text-sm text-v2-text-primary leading-relaxed">
+              {task.length > 200 ? task.slice(0, 200) + '...' : task}
+            </p>
+            {evalCriteria.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1">
+                {evalCriteria.slice(0, 5).map((c, i) => (
+                  <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-v2-surface border border-v2-border-subtle text-v2-text-muted">
+                    {typeof c === 'string' && c.length > 60 ? c.slice(0, 60) + '...' : c}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="px-4 py-0.5">

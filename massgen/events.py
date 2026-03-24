@@ -186,6 +186,7 @@ class EventEmitter:
         self._current_agent_id: str | None = None
         self._current_round_numbers: dict[str, int] = {}
         self._default_round_number: int = 0
+        self._checkpoint_display_ids: dict[str, str] = {}  # real_id -> display_id
 
         # Initialize file if log_dir provided
         if self._log_dir:
@@ -273,6 +274,18 @@ class EventEmitter:
 
                 _logging.getLogger(__name__).debug("Event listener %s failed: %s", listener, e)
 
+    def set_checkpoint_display_ids(self, mapping: dict[str, str]) -> None:
+        """Set display ID mapping for checkpoint mode.
+
+        When set, agent_ids in emitted events are remapped to display IDs
+        so the WebUI can route messages to checkpoint-specific channels.
+
+        Args:
+            mapping: real_agent_id -> display_id (e.g. {"agent_a": "agent_a-ckpt1"}).
+                     Pass empty dict to clear.
+        """
+        self._checkpoint_display_ids = dict(mapping)
+
     def emit_raw(self, event_type: str, **kwargs: Any) -> None:
         """Emit an event with automatic timestamp and context.
 
@@ -281,6 +294,12 @@ class EventEmitter:
             **kwargs: Event-specific data
         """
         resolved_agent_id = kwargs.pop("agent_id", self._current_agent_id)
+        # Remap agent_id to checkpoint display ID if active
+        if resolved_agent_id and self._checkpoint_display_ids:
+            resolved_agent_id = self._checkpoint_display_ids.get(
+                resolved_agent_id,
+                resolved_agent_id,
+            )
         explicit_round = kwargs.pop("round_number", None)
         if explicit_round is not None:
             resolved_round = explicit_round
@@ -502,6 +521,49 @@ class EventEmitter:
             EventType.SYSTEM_STATUS,
             message=message,
             agent_id=agent_id,
+        )
+
+    def emit_checkpoint_activated(
+        self,
+        checkpoint_number: int,
+        task: str,
+        participants: dict[str, dict[str, Any]],
+        main_agent_id: str | None = None,
+    ) -> None:
+        """Emit a checkpoint_activated event for WebUI channel creation.
+
+        Args:
+            checkpoint_number: Sequential checkpoint number
+            task: The checkpoint task description
+            participants: display_id -> {real_agent_id, model} mapping
+            main_agent_id: The delegating agent's real ID
+        """
+        self.emit_raw(
+            "checkpoint_activated",
+            checkpoint_number=checkpoint_number,
+            task=task,
+            participants=participants,
+            main_agent_id=main_agent_id,
+        )
+
+    def emit_checkpoint_completed(
+        self,
+        checkpoint_number: int,
+        consensus: str,
+        main_agent_id: str | None = None,
+    ) -> None:
+        """Emit a checkpoint_completed event.
+
+        Args:
+            checkpoint_number: Sequential checkpoint number
+            consensus: The winning answer text
+            main_agent_id: The delegating agent's real ID
+        """
+        self.emit_raw(
+            "checkpoint_completed",
+            checkpoint_number=checkpoint_number,
+            consensus=consensus[:500] if consensus else "",
+            main_agent_id=main_agent_id,
         )
 
     def emit_error(self, error: str, agent_id: str | None = None) -> None:
