@@ -9,10 +9,14 @@ from typing import Any
 
 from .base import BaseToolkit, ToolType
 
-_EXPECTED_ACTIONS_SCHEMA = {
+_GATED_ACTIONS_SCHEMA = {
     "type": "array",
     "description": (
-        "Hints about tools agents should propose in their answers. " "Each entry: {tool: 'tool_name', description: 'what it does'}. " "Useful for tools that checkpoint agents may not have access to."
+        "Restricted tools that agents should propose in their answers "
+        "rather than execute directly. Use for tools requiring approval "
+        "or that are expensive/irreversible. "
+        "Each entry: {tool: 'tool_name', description: 'what it does'}. "
+        "Can be empty if no tools need gating."
     ),
     "items": {
         "type": "object",
@@ -29,6 +33,51 @@ _EXPECTED_ACTIONS_SCHEMA = {
         "required": ["tool", "description"],
     },
 }
+
+_EVAL_CRITERIA_SCHEMA = {
+    "type": "array",
+    "description": (
+        "Evaluation criteria the team should use to judge quality of their work. "
+        "Each criterion is a string describing what good output looks like. "
+        "These become the checklist agents evaluate against before submitting."
+    ),
+    "items": {"type": "string"},
+    "minItems": 1,
+}
+
+_PERSONAS_SCHEMA = {
+    "type": "object",
+    "description": (
+        "Optional agent personas for role assignment. "
+        "Dict of agent_id -> persona text. Each persona gives an agent "
+        "a distinct perspective or expertise area. If omitted, agents "
+        "work without specific role assignments."
+    ),
+    "additionalProperties": {"type": "string"},
+}
+
+_CHECKPOINT_DESCRIPTION = (
+    "Delegate a task to the multi-agent team for collaborative "
+    "execution. All configured agents activate and work on the "
+    "task using standard coordination (iterate, refine, vote). "
+    "The consensus result and workspace changes sync back to you."
+)
+
+_PROPERTIES = {
+    "task": {
+        "type": "string",
+        "description": "What agents should accomplish",
+    },
+    "eval_criteria": _EVAL_CRITERIA_SCHEMA,
+    "context": {
+        "type": "string",
+        "description": "Background info, prior work, constraints",
+    },
+    "personas": _PERSONAS_SCHEMA,
+    "gated_actions": _GATED_ACTIONS_SCHEMA,
+}
+
+_REQUIRED = ["task", "eval_criteria"]
 
 
 class CheckpointToolkit(BaseToolkit):
@@ -58,26 +107,11 @@ class CheckpointToolkit(BaseToolkit):
     def _build_claude_format(self) -> dict[str, Any]:
         return {
             "name": "checkpoint",
-            "description": (
-                "Delegate a task to the multi-agent team for collaborative "
-                "execution. All configured agents activate and work on the "
-                "task using standard coordination (iterate, refine, vote). "
-                "The consensus result and workspace changes sync back to you."
-            ),
+            "description": _CHECKPOINT_DESCRIPTION,
             "input_schema": {
                 "type": "object",
-                "properties": {
-                    "task": {
-                        "type": "string",
-                        "description": "What agents should accomplish",
-                    },
-                    "context": {
-                        "type": "string",
-                        "description": ("Background info, prior work, constraints"),
-                    },
-                    "expected_actions": _EXPECTED_ACTIONS_SCHEMA,
-                },
-                "required": ["task"],
+                "properties": _PROPERTIES,
+                "required": _REQUIRED,
             },
         }
 
@@ -86,21 +120,11 @@ class CheckpointToolkit(BaseToolkit):
             "type": "function",
             "function": {
                 "name": "checkpoint",
-                "description": ("Delegate a task to the multi-agent team for " "collaborative execution. All configured agents " "activate and work on the task together."),
+                "description": _CHECKPOINT_DESCRIPTION,
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "task": {
-                            "type": "string",
-                            "description": ("What agents should accomplish"),
-                        },
-                        "context": {
-                            "type": "string",
-                            "description": ("Background info, prior work, constraints"),
-                        },
-                        "expected_actions": _EXPECTED_ACTIONS_SCHEMA,
-                    },
-                    "required": ["task"],
+                    "properties": _PROPERTIES,
+                    "required": _REQUIRED,
                 },
             },
         }
@@ -110,21 +134,11 @@ class CheckpointToolkit(BaseToolkit):
             "type": "function",
             "function": {
                 "name": "checkpoint",
-                "description": ("Delegate a task to the multi-agent team for " "collaborative execution. All configured agents " "activate and work on the task together."),
+                "description": _CHECKPOINT_DESCRIPTION,
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "task": {
-                            "type": "string",
-                            "description": ("What agents should accomplish"),
-                        },
-                        "context": {
-                            "type": "string",
-                            "description": ("Background info, prior work, constraints"),
-                        },
-                        "expected_actions": _EXPECTED_ACTIONS_SCHEMA,
-                    },
-                    "required": ["task"],
+                    "properties": _PROPERTIES,
+                    "required": _REQUIRED,
                 },
             },
         }

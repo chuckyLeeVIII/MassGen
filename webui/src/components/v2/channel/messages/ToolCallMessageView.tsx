@@ -11,6 +11,8 @@ export function ToolCallMessageView({ message }: ToolCallMessageViewProps) {
   const [expanded, setExpanded] = useState(false);
 
   const isPending = message.result === undefined;
+  const isCheckpoint = message.toolName === 'mcp__massgen_checkpoint__checkpoint'
+    || message.toolName === 'checkpoint';
 
   const elapsedStr = message.elapsed
     ? message.elapsed > 1000
@@ -20,59 +22,99 @@ export function ToolCallMessageView({ message }: ToolCallMessageViewProps) {
 
   const filePath = extractFilePath(message.args);
 
-  return (
-    <div className="px-4 py-0.5">
-      {/* Card header only */}
-      <div className="rounded-md border border-v2-border-subtle bg-v2-surface overflow-hidden">
-        <button
-          onClick={() => setExpanded(!expanded)}
-          className={cn(
-            'flex items-center gap-2 w-full text-left px-2.5 py-1',
-            'hover:bg-[var(--v2-channel-hover)] transition-colors duration-100',
-          )}
-        >
-          <svg
-            className={cn(
-              'w-3 h-3 text-v2-text-muted transition-transform duration-150 shrink-0',
-              expanded && 'rotate-90'
-            )}
-            viewBox="0 0 12 12"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-          >
-            <path d="M4 2l4 4-4 4" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-
-          <span className={cn(
-            'w-1.5 h-1.5 rounded-full shrink-0',
-            isPending ? 'bg-blue-400 animate-pulse' : message.success ? 'bg-v2-online' : 'bg-red-400'
-          )} />
-
-          <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 shrink-0">
-            {message.toolName}
-          </span>
-
-          <span className="font-mono text-xs text-v2-text-muted truncate flex-1">
-            {filePath || ''}
-          </span>
-
-          <HookCountBadge preHooks={message.preHooks} postHooks={message.postHooks} />
-
-          {elapsedStr && (
-            <span className="text-xs text-v2-text-muted shrink-0">
-              {elapsedStr}
+  // Special rendering for checkpoint delegation
+  if (isCheckpoint) {
+    const task = (message.args.task as string) || '';
+    const evalCriteria = (message.args.eval_criteria as string[]) || [];
+    return (
+      <div className="v2-step-group">
+        <div className="v2-step-node" />
+        <div className="rounded-lg border border-blue-500/30 bg-blue-500/5 overflow-hidden">
+          <div className="flex items-center gap-2 px-3 py-2">
+            <span className="text-base">📋</span>
+            <span className="text-sm font-semibold text-blue-400 uppercase tracking-wide">
+              Checkpoint Delegation
             </span>
-          )}
-        </button>
+            {isPending && (
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse shrink-0" />
+            )}
+            {!isPending && (
+              <span className="w-1.5 h-1.5 rounded-full bg-v2-online shrink-0" />
+            )}
+            <div className="flex-1" />
+            {elapsedStr && (
+              <span className="text-xs text-v2-text-muted">{elapsedStr}</span>
+            )}
+          </div>
+          <div className="px-3 pb-2">
+            <p className="text-sm text-v2-text-primary leading-relaxed">
+              {task.length > 200 ? task.slice(0, 200) + '...' : task}
+            </p>
+            {evalCriteria.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1">
+                {evalCriteria.slice(0, 5).map((c, i) => (
+                  <span key={i} className="text-[11px] px-1.5 py-0.5 rounded bg-v2-surface border border-v2-border-subtle text-v2-text-muted">
+                    {typeof c === 'string' && c.length > 60 ? c.slice(0, 60) + '...' : c}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="v2-step-group">
+      {/* Inline trace row — no card chrome */}
+      <div
+        className={cn(
+          'v2-tool-row flex items-center gap-[7px] py-[3px] cursor-pointer rounded-sm',
+          'hover:bg-[var(--v2-channel-hover)] transition-colors duration-100',
+          expanded && 'v2-tool-row-expanded'
+        )}
+        onClick={() => setExpanded(!expanded)}
+      >
+        <svg
+          className="v2-hover-chevron w-3 h-3 shrink-0 text-v2-text-muted"
+          style={{ marginLeft: '-14px', marginRight: '-5px' }}
+          viewBox="0 0 12 12"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        >
+          <path d="M4 2l4 4-4 4" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+
+        <span className={cn(
+          'w-1.5 h-1.5 rounded-full shrink-0',
+          isPending ? 'bg-blue-400 animate-pulse' : message.success ? 'bg-v2-online' : 'bg-red-400'
+        )} />
+
+        <span className="font-mono text-xs font-medium text-v2-text-muted opacity-80 shrink-0">
+          {message.toolName}
+        </span>
+
+        <span className="font-mono text-xs text-v2-text-muted truncate flex-1">
+          {filePath || ''}
+        </span>
+
+        <HookCountBadge preHooks={message.preHooks} postHooks={message.postHooks} />
+
+        {elapsedStr && (
+          <span className="text-xs font-mono text-v2-text-muted shrink-0">
+            {elapsedStr}
+          </span>
+        )}
       </div>
 
-      {/* Expanded details below card, indented with left border */}
+      {/* Expanded details — subtle left border */}
       {expanded && (
-        <div className="ml-[18px] border-l-2 border-v2-border-subtle pl-3 mt-0.5 space-y-2 animate-v2-fade-in">
+        <div className="ml-1.5 border-l border-v2-border-subtle pl-3 mt-0.5 space-y-2 animate-v2-fade-in">
           {Object.keys(message.args).length > 0 && (
             <div className="rounded bg-v2-surface p-2 border border-v2-border-subtle">
-              <div className="text-[10px] uppercase tracking-wider text-v2-text-muted mb-1">Args</div>
+              <div className="text-[11px] uppercase tracking-wider text-v2-text-muted mb-1">Args</div>
               <pre className="text-xs font-mono whitespace-pre-wrap break-all">
                 <JsonValue value={message.args} />
               </pre>
@@ -80,7 +122,7 @@ export function ToolCallMessageView({ message }: ToolCallMessageViewProps) {
           )}
           {message.result !== undefined && (
             <div className="rounded bg-v2-surface p-2 border border-v2-border-subtle">
-              <div className="text-[10px] uppercase tracking-wider text-v2-text-muted mb-1">Result</div>
+              <div className="text-[11px] uppercase tracking-wider text-v2-text-muted mb-1">Result</div>
               <pre className="text-xs font-mono text-v2-text-secondary whitespace-pre-wrap break-all max-h-[300px] overflow-y-auto v2-scrollbar">
                 {message.result}
               </pre>
@@ -183,7 +225,7 @@ export function HookList({ label, hooks }: { label: string; hooks?: HookExecutio
   if (!hooks || hooks.length === 0) return null;
   return (
     <div className="rounded bg-v2-surface p-2 border border-v2-border-subtle">
-      <div className="text-[10px] uppercase tracking-wider text-v2-text-muted mb-1">{label}</div>
+      <div className="text-[11px] uppercase tracking-wider text-v2-text-muted mb-1">{label}</div>
       <div className="space-y-1">
         {hooks.map((hook, i) => (
           <HookRow key={`${hook.hook_name}-${i}`} hook={hook} />

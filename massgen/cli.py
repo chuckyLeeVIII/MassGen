@@ -3956,6 +3956,7 @@ async def run_question_with_history(
         nlip_config=orchestrator_nlip_config,
         generated_personas=generated_personas,  # Only if persist_across_turns=True
         generated_evaluation_criteria=generated_evaluation_criteria,
+        raw_config=kwargs.get("raw_config"),
     )
 
     # Apply pre-populated workspaces from incomplete turns (passed from interactive mode)
@@ -3965,14 +3966,26 @@ async def run_question_with_history(
 
     # Detect main_agent for checkpoint coordination mode
     # MCP injection is handled by orchestrator._init_checkpoint_tool() in __init__
+    _ckpt_main_agent_id = None
     raw_agents_for_checkpoint = kwargs.get("agents_config", [])
     if isinstance(raw_agents_for_checkpoint, list):
         for agent_data in raw_agents_for_checkpoint:
             if isinstance(agent_data, dict) and agent_data.get("main_agent") is True:
-                main_agent_id = agent_data.get("id")
-                if main_agent_id and main_agent_id in agents:
-                    orchestrator.set_main_agent(main_agent_id)
+                _ckpt_main_agent_id = agent_data.get("id")
                 break
+
+    # Fallback: if checkpoint is enabled but no main_agent is set,
+    # default to the first agent
+    if not _ckpt_main_agent_id:
+        if getattr(orchestrator_config, "coordination_config", None) and getattr(
+            orchestrator_config.coordination_config,
+            "checkpoint_enabled",
+            False,
+        ):
+            _ckpt_main_agent_id = sorted(agents.keys())[0] if agents else None
+
+    if _ckpt_main_agent_id and _ckpt_main_agent_id in agents:
+        orchestrator.set_main_agent(_ckpt_main_agent_id)
 
     # Parse per-agent subtask assignments for decomposition mode
     if orchestrator_config.coordination_mode == "decomposition":
@@ -4401,6 +4414,7 @@ async def run_single_question(
             enable_rate_limit=kwargs.get("enable_rate_limit", False),
             enable_nlip=orchestrator_enable_nlip,
             nlip_config=orchestrator_nlip_config,
+            raw_config=kwargs.get("raw_config"),
         )
 
         # Parse per-agent subtask assignments for decomposition mode
@@ -7236,6 +7250,7 @@ async def run_textual_interactive_mode(
                 generated_personas=generated_personas,
                 generated_evaluation_criteria=generated_evaluation_criteria,
                 plan_session_id=plan_session_id,
+                raw_config=original_config or kwargs.get("raw_config"),
             )
 
             # Parse per-agent subtask assignments for decomposition mode
@@ -9947,6 +9962,9 @@ async def main(args):
         elif "agent" in config:
             kwargs["agents_config"] = [config["agent"]]
 
+        # Pass raw config dict for checkpoint subprocess config generation
+        kwargs["raw_config"] = config
+
         # Add rate limit flag to kwargs for interactive mode
         kwargs["enable_rate_limit"] = enable_rate_limit
         kwargs["parse_at_references"] = getattr(args, "parse_at_references", True)
@@ -10044,6 +10062,7 @@ async def main(args):
                 snapshot_storage=snapshot_storage,
                 agent_temporary_workspace=agent_temporary_workspace,
                 step_mode=step_config,
+                raw_config=kwargs.get("raw_config"),
             )
 
             # Build UI and run question

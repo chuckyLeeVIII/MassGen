@@ -186,7 +186,6 @@ class EventEmitter:
         self._current_agent_id: str | None = None
         self._current_round_numbers: dict[str, int] = {}
         self._default_round_number: int = 0
-
         # Initialize file if log_dir provided
         if self._log_dir:
             self._init_file()
@@ -502,6 +501,49 @@ class EventEmitter:
             EventType.SYSTEM_STATUS,
             message=message,
             agent_id=agent_id,
+        )
+
+    def emit_checkpoint_activated(
+        self,
+        checkpoint_number: int,
+        task: str,
+        participants: dict[str, dict[str, Any]],
+        main_agent_id: str | None = None,
+    ) -> None:
+        """Emit a checkpoint_activated event for WebUI channel creation.
+
+        Args:
+            checkpoint_number: Sequential checkpoint number
+            task: The checkpoint task description
+            participants: display_id -> {real_agent_id, model} mapping
+            main_agent_id: The delegating agent's real ID
+        """
+        self.emit_raw(
+            "checkpoint_activated",
+            checkpoint_number=checkpoint_number,
+            task=task,
+            participants=participants,
+            main_agent_id=main_agent_id,
+        )
+
+    def emit_checkpoint_completed(
+        self,
+        checkpoint_number: int,
+        consensus: str,
+        main_agent_id: str | None = None,
+    ) -> None:
+        """Emit a checkpoint_completed event.
+
+        Args:
+            checkpoint_number: Sequential checkpoint number
+            consensus: The winning answer text
+            main_agent_id: The delegating agent's real ID
+        """
+        self.emit_raw(
+            "checkpoint_completed",
+            checkpoint_number=checkpoint_number,
+            consensus=consensus[:500] if consensus else "",
+            main_agent_id=main_agent_id,
         )
 
     def emit_error(self, error: str, agent_id: str | None = None) -> None:

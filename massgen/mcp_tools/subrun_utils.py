@@ -91,6 +91,62 @@ def generate_subrun_config(
     return config
 
 
+def generate_checkpoint_config(
+    parent_config: dict[str, Any],
+    workspace: Path,
+    signal: dict[str, Any],
+) -> dict[str, Any]:
+    """Generate a YAML config for a checkpoint sub-run.
+
+    Extends ``generate_subrun_config`` with checkpoint-specific overrides:
+    - Injects ``eval_criteria`` from the signal as inline checklist criteria
+    - Injects ``personas`` from the signal into per-agent configs
+    - Sets ``checkpoint_enabled: false`` to prevent recursion
+    - Removes ``main_agent`` flags (all agents participate equally)
+
+    Args:
+        parent_config: The parent orchestrator's raw YAML config dict.
+        workspace: Path to the checkpoint sub-run workspace.
+        signal: The checkpoint signal dict (task, eval_criteria, personas, etc.).
+
+    Returns:
+        Config dict ready to be written as YAML for the subprocess.
+    """
+    # Start with base subrun config (removes main_agent, filters MCPs)
+    config = generate_subrun_config(
+        parent_config,
+        workspace,
+        exclude_mcp_servers=["checkpoint", "gated_action", "massgen_checkpoint"],
+    )
+
+    # Ensure orchestrator.coordination section exists
+    if "orchestrator" not in config:
+        config["orchestrator"] = {}
+    coord = config["orchestrator"].setdefault("coordination", {})
+
+    # Disable checkpoint in the subprocess to prevent recursion
+    coord["checkpoint_enabled"] = False
+
+    # Inject eval_criteria as checklist-gated evaluation mode
+    eval_criteria = signal.get("eval_criteria", [])
+    if eval_criteria:
+        coord["evaluation_mode"] = "checklist_gated"
+        coord["inline_checklist_criteria"] = list(eval_criteria)
+
+    # Inject personas into agent configs (handles both "agents" list and "agent" singular)
+    personas = signal.get("personas") or {}
+    if personas:
+        agents_list = config.get("agents", [])
+        if not agents_list and "agent" in config:
+            agents_list = [config["agent"]]
+        for agent_cfg in agents_list:
+            agent_id = agent_cfg.get("id", "")
+            if agent_id in personas:
+                agent_cfg["persona"] = personas[agent_id]
+
+    return config
+
+
 def sync_workspace_from_subrun(
     subrun_workspace: Path,
     main_workspace: Path,

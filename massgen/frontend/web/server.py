@@ -751,6 +751,7 @@ class ConnectionManager:
         session_id: str,
         agent_ids: list,
         agent_models: dict[str, str] | None = None,
+        main_agent_id: str | None = None,
     ) -> WebDisplay:
         """Create a new WebDisplay for a session."""
 
@@ -762,6 +763,7 @@ class ConnectionManager:
             broadcast=broadcast_fn,
             session_id=session_id,
             agent_models=agent_models,
+            main_agent_id=main_agent_id,
         )
         self.displays[session_id] = display
         return display
@@ -5277,8 +5279,25 @@ async def run_coordination_with_history(
             if model_name:
                 agent_models[agent_id] = model_name
 
+        # Detect main_agent for checkpoint mode (show only main agent initially)
+        _main_agent_for_display = None
+        for agent_data in config.get("agents", []):
+            if isinstance(agent_data, dict) and agent_data.get("main_agent") is True:
+                _main_agent_for_display = agent_data.get("id")
+                break
+        # Fallback: if checkpoint enabled but no main_agent, use first agent
+        if not _main_agent_for_display:
+            coord_cfg = config.get("orchestrator", config).get("coordination", {})
+            if coord_cfg.get("checkpoint_enabled", False) and agent_ids:
+                _main_agent_for_display = agent_ids[0]
+
         # Create web display with agent_models
-        display = manager.create_display(session_id, agent_ids, agent_models)
+        display = manager.create_display(
+            session_id,
+            agent_ids,
+            agent_models,
+            main_agent_id=_main_agent_for_display,
+        )
 
         # Build AgentConfig object for orchestrator
         orchestrator_config = AgentConfig()
@@ -5381,6 +5400,7 @@ async def run_coordination_with_history(
             agent_temporary_workspace=agent_temporary_workspace,
             previous_turns=previous_turns,
             winning_agents_history=winning_agents_history,
+            raw_config=config,
         )
 
         # Set up checkpoint coordination if main_agent configured
@@ -5859,6 +5879,13 @@ def _apply_mode_overrides(config: dict, overrides: dict | None) -> None:
             coord["checkpoint_gated_patterns"] = gated_patterns
         # Mark the main agent in config (MCP injection handled by orchestrator)
         main_agent_id = overrides.get("main_agent")
+        # Default to first agent if not specified
+        if not main_agent_id:
+            agents_list = config.get("agents", [])
+            for agent in agents_list:
+                if isinstance(agent, dict) and agent.get("id"):
+                    main_agent_id = agent["id"]
+                    break
         if main_agent_id:
             agents_list = config.get("agents", [])
             for agent in agents_list:
@@ -5879,8 +5906,9 @@ def _setup_checkpoint_orchestrator(
 ) -> None:
     """Detect main_agent in config and call orchestrator.set_main_agent().
 
-    MCP injection is handled automatically by set_main_agent() which
-    calls _init_checkpoint_tool() internally.
+    If checkpoint is enabled but no agent has ``main_agent: true``,
+    defaults to the first agent.  MCP injection is handled automatically
+    by set_main_agent() which calls _init_checkpoint_tool() internally.
     """
     agents_list = config.get("agents", [])
     if not isinstance(agents_list, list):
@@ -5891,6 +5919,14 @@ def _setup_checkpoint_orchestrator(
         if isinstance(agent_data, dict) and agent_data.get("main_agent") is True:
             main_agent_id = agent_data.get("id")
             break
+
+    # Fallback: if checkpoint is enabled but no main_agent is set,
+    # default to the first agent
+    if not main_agent_id:
+        coord_cfg = config.get("orchestrator", config).get("coordination", {})
+        checkpoint_enabled = coord_cfg.get("checkpoint_enabled", False)
+        if checkpoint_enabled and orchestrator.agents:
+            main_agent_id = sorted(orchestrator.agents.keys())[0]
 
     if not main_agent_id or main_agent_id not in orchestrator.agents:
         return
@@ -6058,8 +6094,25 @@ async def run_coordination(
             ", ".join(agent_ids),
         )
 
+        # Detect main_agent for checkpoint mode (show only main agent initially)
+        _main_agent_for_display = None
+        for agent_data in config.get("agents", []):
+            if isinstance(agent_data, dict) and agent_data.get("main_agent") is True:
+                _main_agent_for_display = agent_data.get("id")
+                break
+        # Fallback: if checkpoint enabled but no main_agent, use first agent
+        if not _main_agent_for_display:
+            coord_cfg = config.get("orchestrator", config).get("coordination", {})
+            if coord_cfg.get("checkpoint_enabled", False) and agent_ids:
+                _main_agent_for_display = agent_ids[0]
+
         # Create web display with agent_models
-        display = manager.create_display(session_id, agent_ids, agent_models)
+        display = manager.create_display(
+            session_id,
+            agent_ids,
+            agent_models,
+            main_agent_id=_main_agent_for_display,
+        )
 
         await send_init_status("Initializing orchestrator...", "orchestrator", 80)
 
@@ -6162,6 +6215,7 @@ async def run_coordination(
             session_id=session_id,
             snapshot_storage=snapshot_storage,
             agent_temporary_workspace=agent_temporary_workspace,
+            raw_config=config,
         )
 
         # Set up checkpoint coordination if main_agent configured

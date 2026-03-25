@@ -27,13 +27,20 @@ def validate_checkpoint_params(
     task: str,
     context: str = "",
     expected_actions: list[dict[str, Any]] | None = None,
+    eval_criteria: list[str] | None = None,
+    personas: dict[str, str] | None = None,
+    gated_actions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Validate checkpoint tool parameters.
 
     Args:
         task: What agents should accomplish (required, non-empty).
         context: Background info, prior work, constraints.
-        expected_actions: Hints about gated actions agents should propose.
+        expected_actions: DEPRECATED — use gated_actions instead.
+        eval_criteria: Evaluation criteria for the checkpoint round (required, non-empty).
+        personas: Optional dict of agent_id -> persona text for role assignment.
+        gated_actions: Tools that are gated (agents must propose, not execute directly).
+            Each entry: {"tool": "tool_name", "description": "what it does"}.
 
     Returns:
         Validated parameter dict.
@@ -44,17 +51,28 @@ def validate_checkpoint_params(
     if not task or not task.strip():
         raise ValueError("task is required and must be non-empty")
 
-    if expected_actions is not None:
-        for i, action in enumerate(expected_actions):
+    # eval_criteria is required and must be non-empty
+    if not eval_criteria:
+        raise ValueError("eval_criteria is required and must be a non-empty list")
+
+    # Merge expected_actions into gated_actions for backward compat
+    resolved_gated = gated_actions or expected_actions or []
+
+    if resolved_gated:
+        for i, action in enumerate(resolved_gated):
             if "tool" not in action:
                 raise ValueError(
-                    f"expected_actions[{i}] must have a 'tool' field",
+                    f"gated_actions[{i}] must have a 'tool' field",
                 )
 
     return {
         "task": task.strip(),
         "context": context or "",
-        "expected_actions": expected_actions or [],
+        "eval_criteria": list(eval_criteria),
+        "personas": dict(personas) if personas else {},
+        "gated_actions": resolved_gated,
+        # Keep expected_actions for backward compat with existing code
+        "expected_actions": resolved_gated,
     }
 
 
@@ -62,22 +80,33 @@ def build_checkpoint_signal(
     task: str,
     context: str = "",
     expected_actions: list[dict[str, Any]] | None = None,
+    eval_criteria: list[str] | None = None,
+    personas: dict[str, str] | None = None,
+    gated_actions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build a checkpoint signal dict for orchestrator detection.
 
     Args:
         task: What agents should accomplish.
         context: Background info.
-        expected_actions: Hints about expected gated actions.
+        expected_actions: DEPRECATED — use gated_actions.
+        eval_criteria: Evaluation criteria for the checkpoint round.
+        personas: Optional dict of agent_id -> persona text.
+        gated_actions: Gated tools agents should propose rather than execute.
 
     Returns:
-        Signal dict with type, task, context, expected_actions.
+        Signal dict with type, task, context, eval_criteria, personas, gated_actions.
     """
+    resolved_gated = gated_actions or expected_actions or []
     return {
         "type": "checkpoint",
         "task": task,
         "context": context or "",
-        "expected_actions": expected_actions or [],
+        "eval_criteria": list(eval_criteria) if eval_criteria else [],
+        "personas": dict(personas) if personas else {},
+        "gated_actions": resolved_gated,
+        # Keep expected_actions for backward compat
+        "expected_actions": resolved_gated,
     }
 
 
@@ -147,8 +176,10 @@ async def create_server():
     @mcp.tool()
     def checkpoint(
         task: str,
+        eval_criteria: list[str],
         context: str = "",
-        expected_actions: list[dict[str, Any]] | None = None,
+        personas: dict[str, str] | None = None,
+        gated_actions: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Delegate a task to the multi-agent team for collaborative execution.
 
@@ -156,20 +187,29 @@ async def create_server():
         coordination (iterate, refine, vote). The consensus result and any
         workspace changes sync back to you.
 
-        Use expected_actions to describe tools agents should include in their
-        proposed_actions (especially tools they may not have access to).
-
         Args:
             task: What agents should accomplish (required).
+            eval_criteria: Evaluation criteria the team should use to judge quality.
+                Each criterion is a string describing what good output looks like.
             context: Background info, prior work, constraints.
-            expected_actions: Hints about gated actions agents should propose.
-                Each entry: {"tool": "tool_name", "description": "what it does"}
+            personas: Optional agent personas. Dict of agent_id -> persona text.
+                Each persona gives an agent a distinct role/perspective.
+            gated_actions: Restricted tools agents should propose in their answers
+                rather than execute directly. Each entry:
+                {"tool": "tool_name", "description": "what it does"}.
+                Use for tools that require approval or are expensive.
 
         Returns:
             Dict with consensus, workspace_changes, and action_results.
         """
         try:
-            params = validate_checkpoint_params(task, context, expected_actions)
+            params = validate_checkpoint_params(
+                task,
+                context,
+                eval_criteria=eval_criteria,
+                personas=personas,
+                gated_actions=gated_actions,
+            )
         except ValueError as e:
             return {
                 "success": False,
@@ -180,7 +220,9 @@ async def create_server():
         signal = build_checkpoint_signal(
             task=params["task"],
             context=params["context"],
-            expected_actions=params["expected_actions"],
+            eval_criteria=params["eval_criteria"],
+            personas=params["personas"],
+            gated_actions=params["gated_actions"],
         )
 
         write_checkpoint_signal(signal, _workspace_path)

@@ -89,6 +89,11 @@ class StreamChunk:
     hook_info: dict[str, Any] | None = None  # Hook execution details for display
     tool_call_id: str | None = None  # ID of tool call this hook is attached to
 
+    # Checkpoint event fields (for "checkpoint_activated" / "checkpoint_completed" type chunks)
+    checkpoint_participants: dict[str, Any] | None = None  # display_id -> {real_agent_id, model}
+    checkpoint_number: int | None = None  # Sequential checkpoint number
+    main_agent_id: str | None = None  # The delegating agent's real ID
+
     # Display flag - reserved for future use (not yet consumed by any handler)
     display: bool = True
 
@@ -1204,6 +1209,16 @@ def build_workflow_instructions(tools: list[dict[str, Any]]) -> str:
             )
             parts.append(
                 '    IMPORTANT: When user says "call ask_others" or "ask others", you MUST execute this tool call.',
+            )
+        elif name == "checkpoint":
+            parts.append(
+                '    Usage: {"tool_name": "checkpoint", '
+                '"arguments": {"task": "What agents should accomplish", '
+                '"eval_criteria": ["criterion 1", "criterion 2", "...more as needed"], '
+                '"context": "Background info"}}',
+            )
+            parts.append(
+                "    eval_criteria is REQUIRED: provide 3-7 specific, measurable quality criteria " "the team will evaluate against.",
             )
 
     parts.append("\n--- MassGen Coordination Instructions ---")

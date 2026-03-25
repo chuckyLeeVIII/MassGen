@@ -190,8 +190,8 @@ interface MessageStoreState {
   threads: ThreadInfo[];
   /** Current coordination phase (from phase_change events) */
   currentPhase: string | null;
-  /** Task plan extracted from planning tool results */
-  taskPlan: TaskItem[];
+  /** Per-agent task plans extracted from planning tool results */
+  taskPlans: Record<string, TaskItem[]>;
   /** Monotonic counter for message IDs */
   _counter: number;
 }
@@ -210,7 +210,7 @@ const initialState: MessageStoreState = {
   pendingToolCalls: {},
   threads: [],
   currentPhase: null,
-  taskPlan: [],
+  taskPlans: {},
   _counter: 0,
 };
 
@@ -255,7 +255,7 @@ export const useMessageStore = create<MessageStoreState & MessageStoreActions>(
               currentRound: rounds,
               pendingToolCalls: {},
               currentPhase: null,
-              taskPlan: [],
+              taskPlans: {},
               _counter: 0,
             });
           }
@@ -279,6 +279,78 @@ export const useMessageStore = create<MessageStoreState & MessageStoreActions>(
             const phase = (se.data.phase as string) || '';
             console.log('[v2 messageStore] phase_change:', phase, se.data);
             set({ currentPhase: phase || null });
+            break;
+          }
+
+          // Checkpoint activation: dynamically create channels for participants
+          if (se.event_type === 'checkpoint_activated') {
+            const participants = (se.data.participants as Record<string, { real_agent_id: string; model: string }>) || {};
+            const checkpointNumber = (se.data.checkpoint_number as number) || 1;
+            const mainAgentId = (se.data.main_agent_id as string) || '';
+            const newMessages = { ...state.messages };
+            const newOrder = [...state.agentOrder];
+            const newModels = { ...state.agentModels };
+            const newRounds = { ...state.currentRound };
+
+            for (const [displayId, info] of Object.entries(participants)) {
+              if (!newMessages[displayId]) {
+                newMessages[displayId] = [];
+                newRounds[displayId] = 0;
+                if (info.model) newModels[displayId] = info.model;
+                // Insert after the real agent in the order
+                const realIdx = newOrder.indexOf(info.real_agent_id);
+                if (realIdx >= 0 && !newOrder.includes(displayId)) {
+                  newOrder.splice(realIdx + 1, 0, displayId);
+                } else if (!newOrder.includes(displayId)) {
+                  newOrder.push(displayId);
+                }
+              }
+            }
+
+            // Add a delegation notice to the main agent's original channel
+            if (mainAgentId && state.messages[mainAgentId]) {
+              const task = (se.data.task as string) || '';
+              const notice: ContentMessage = {
+                id: `msg-${state._counter}`,
+                type: 'content',
+                agentId: mainAgentId,
+                timestamp: se.timestamp,
+                content: `📋 Checkpoint #${checkpointNumber} — delegated to team: ${task.slice(0, 120)}...`,
+                contentType: 'text',
+              };
+              newMessages[mainAgentId] = [...(newMessages[mainAgentId] || []), notice];
+            }
+
+            set({
+              messages: newMessages,
+              agentOrder: newOrder,
+              agentModels: newModels,
+              currentRound: newRounds,
+              _counter: state._counter + 1,
+            });
+            console.log('[v2 messageStore] checkpoint_activated: created channels for', Object.keys(participants));
+            break;
+          }
+
+          // Checkpoint completed: add summary to main agent's channel
+          if (se.event_type === 'checkpoint_completed') {
+            const mainAgentId = (se.data.main_agent_id as string) || '';
+            const consensus = (se.data.consensus as string) || '';
+            const checkpointNumber = (se.data.checkpoint_number as number) || 1;
+            if (mainAgentId && state.messages[mainAgentId]) {
+              const notice: ContentMessage = {
+                id: `msg-${state._counter}`,
+                type: 'content',
+                agentId: mainAgentId,
+                timestamp: se.timestamp,
+                content: `✅ Checkpoint #${checkpointNumber} completed. ${consensus ? 'Consensus: ' + consensus.slice(0, 200) + '...' : ''}`,
+                contentType: 'text',
+              };
+              set({
+                messages: { ...state.messages, [mainAgentId]: [...(state.messages[mainAgentId] || []), notice] },
+                _counter: state._counter + 1,
+              });
+            }
             break;
           }
 
@@ -398,7 +470,7 @@ export const useMessageStore = create<MessageStoreState & MessageStoreActions>(
                     // update_task_status: patch existing plan with updated task
                     const updatedTask = resultData.task as Record<string, unknown>;
                     const taskId = String(updatedTask.id || '');
-                    const existingPlan = [...state.taskPlan];
+                    const existingPlan = [...(state.taskPlans[agentId] || [])];
                     const idx = existingPlan.findIndex((t) => t.id === taskId);
                     if (idx >= 0) {
                       existingPlan[idx] = {
@@ -425,7 +497,7 @@ export const useMessageStore = create<MessageStoreState & MessageStoreActions>(
 
               set({
                 messages: { ...state.messages, [agentId]: updated },
-                ...(newTaskPlan !== undefined ? { taskPlan: newTaskPlan } : {}),
+                ...(newTaskPlan !== undefined ? { taskPlans: { ...state.taskPlans, [agentId]: newTaskPlan } } : {}),
               });
               break;
             }
