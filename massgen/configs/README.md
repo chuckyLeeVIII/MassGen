@@ -227,7 +227,24 @@ Most configurations use environment variables for API keys:so
 
 ## Release History & Examples
 
-### v0.1.68 - Latest
+### v0.1.69 - Latest
+**New Features:** WebUI Automation & Skill Mode
+
+**Key Features:**
+- **WebUI Automation Auto-Start**: Automation runs begin immediately — open the URL at any point to monitor progress mid-run
+- **CLI Flags with `--web`**: `--eval-criteria`, `--checklist-criteria-preset`, `--orchestrator-timeout` now work with `--web`
+- **MassGen Skill in WebUI**: Skill runs launchable directly from the WebUI with live session tracking
+- **Gemini CLI Provider**: New `gemini_cli` backend support
+- **Flexible Criteria Fields**: `description`/`name` accepted as alternatives to `text` in evaluation criteria JSON
+
+**Try It:**
+```bash
+pip install massgen==0.1.69
+# Auto-start a run and monitor in the WebUI
+uv run massgen --web --automation --config config.yaml "Your question"
+```
+
+### v0.1.68
 **New Features:** Checkpoint Mode
 
 **Key Features:**

@@ -9,16 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Recent Releases
 
+**v0.1.69 (March 27, 2026)** - WebUI Automation & Skill Mode
+WebUI automation now auto-starts without browser interaction. CLI flags (`--eval-criteria`, `--checklist-criteria-preset`, `--orchestrator-timeout`) work with `--web`. MassGen skill runs directly in WebUI. Gemini CLI provider support. Flexible evaluation criteria field names.
+
 **v0.1.68 (March 25, 2026)** - Checkpoint Mode
 New checkpoint coordination mode with delegator pattern — main agent plans solo then delegates to team via `checkpoint()` tool. LLM API circuit breaker for 429 handling. WebUI checkpoint support. LiteLLM supply chain fix.
 
 **v0.1.67 (March 23, 2026)** - Modernized WebUI
 Complete WebUI redesign with inline final answers, keyboard shortcuts, and Zustand state management. RoundBudgetGuardHook for per-round cost control. Unified parallel pre-collab phases. Regression guard for safe iterations.
 
-**v0.1.66 (March 20, 2026)** - Step Mode
-New `--step` CLI mode for external orchestrators to run one agent for one step then exit. Powers massgen-refinery plugin step mode. Codex Windows UTF-8 fixes and console text sanitization.
-
 ---
+
+## [0.1.69] - 2026-03-27
+
+### Added
+- **WebUI Automation Auto-Start** ([#1032](https://github.com/massgen/MassGen/pull/1032)): Automation mode now auto-starts coordination runs without browser interaction — open the URL at any point to monitor progress, even mid-run
+- **CLI Flags with `--web`** ([#1032](https://github.com/massgen/MassGen/pull/1032)): `--eval-criteria`, `--checklist-criteria-preset`, and `--orchestrator-timeout` now fully supported when combined with `--web`
+- **MassGen Skill in WebUI** ([#1032](https://github.com/massgen/MassGen/pull/1032)): MassGen skill runs are now launchable directly from the WebUI with automatic session tracking and live monitoring
+- **Gemini CLI Provider** ([#1032](https://github.com/massgen/MassGen/pull/1032)): New `gemini_cli` backend provider support
+
+### Changed
+- **Flexible Evaluation Criteria Fields** ([#1032](https://github.com/massgen/MassGen/pull/1032)): Criteria JSON now accepts `description` or `name` as alternatives to `text` field for more flexible criterion authoring
+- **Improved Round View** ([#1032](https://github.com/massgen/MassGen/pull/1032)): Enhanced round visualization in the WebUI with clearer state transitions
+- **Top Banner & UI Polish** ([#1032](https://github.com/massgen/MassGen/pull/1032)): Improved top banner, modal refinements, and frontend quickstart flow
+- **Automatic Config Resolution** ([#1032](https://github.com/massgen/MassGen/pull/1032)): Automation mode auto-resolves config when none is specified (same as CLI without `--web`)
+
+### Fixed
+- **Web Automation Skill Lifecycle** ([#1032](https://github.com/massgen/MassGen/pull/1032)): Web automation now correctly auto-ends when a skill completes
+- **WebUI Version Default** ([#1032](https://github.com/massgen/MassGen/pull/1032)): Fixed WebUI defaulting to v2
+
+### Documentation, Configurations and Resources
+- **Updated WebUI Guide**: Updated `docs/source/user_guide/webui.rst` with automation mode flags, auto-start behavior, and interactive examples
+- **MassGen Skill**: Updated `massgen/skills/massgen/SKILL.md` with WebUI wrapper and monitoring instructions
+- **Advanced Workflows**: Updated `massgen/skills/massgen/references/advanced_workflows.md` with skill WebUI integration patterns
+- **Config Setup**: Updated `massgen/skills/massgen/references/config_setup.md` with updated quickstart guidance
+
+### Technical Details
+- **Major Focus**: WebUI Automation & Skill Mode — seamless integration between the skill workflow and WebUI monitoring
+- **PRs Merged**: [#1032](https://github.com/massgen/MassGen/pull/1032)
+- **Contributors**: @ncrispino, @HenryQi and the MassGen team
 
 ## [0.1.68] - 2026-03-25
 
