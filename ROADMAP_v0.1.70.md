@@ -1,10 +1,10 @@
-# MassGen v0.1.69 Roadmap
+# MassGen v0.1.70 Roadmap
 
-**Target Release:** March 27, 2026
+**Target Release:** March 30, 2026
 
 ## Overview
 
-Version 0.1.69 focuses on running MassGen as a cloud job on Modal.
+Version 0.1.70 focuses on running MassGen as a cloud job on Modal.
 
 ---
 
@@ -27,5 +27,5 @@ Version 0.1.69 focuses on running MassGen as a cloud job on Modal.
 
 ## Related Tracks
 
-- **v0.1.68**: Checkpoint Mode — delegator pattern, WebUI checkpoint support ([#1028](https://github.com/massgen/MassGen/pull/1028), [#1025](https://github.com/massgen/MassGen/pull/1025))
-- **v0.1.70**: OpenAI Audio API ([#960](https://github.com/massgen/MassGen/issues/960))
+- **v0.1.69**: WebUI Automation & Skill Mode — auto-start, CLI flags with `--web`, MassGen skill in WebUI, Gemini CLI provider ([#1032](https://github.com/massgen/MassGen/pull/1032))
+- **v0.1.71**: OpenAI Audio API ([#960](https://github.com/massgen/MassGen/issues/960))
