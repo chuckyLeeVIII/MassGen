@@ -95,21 +95,36 @@ agents discover issues independently.
 
 ### 4. Choose CWD Context
 
+**Default to `rw` when the task produces files.** If the deliverable is a file
+(code, docs, config, README, website, etc.), agents need write access. Use `ro`
+only when agents need to *read* the codebase for context but their output is
+pure text (an answer, review, or analysis) — not files.
+
 | Scenario | Flag |
 |----------|------|
-| Task references the codebase | `--cwd-context ro` |
-| Agents should write directly to the project | `--cwd-context rw` |
+| Task produces/modifies files in the project (code, docs, configs, etc.) | `--cwd-context rw` |
+| Task needs codebase context but output is text only (review, analysis, Q&A) | `--cwd-context ro` |
 | Isolated task, no codebase needed (default) | *(omit flag)* |
+
+**Rule of thumb**: if the user says "write", "create", "build", "rewrite",
+"update", or "edit" something in the project → `rw`.
 
 ### 5. Run
 
 Always use the wrapper script:
 
 ```bash
+# Isolated task (default, no cwd-context needed)
 bash "$SKILL_DIR/scripts/massgen_run.sh" \
-  --mode general --cwd-context off \
+  --mode general \
   --criteria /tmp/massgen_criteria.json \
   "Create an SVG of a butterfly mixed with a panda"
+
+# Task that writes to the project → rw
+bash "$SKILL_DIR/scripts/massgen_run.sh" \
+  --mode general --cwd-context rw \
+  --criteria /tmp/massgen_criteria.json \
+  "Rewrite the README with better examples and structure"
 ```
 
 The wrapper includes `--web --no-browser` by default. The run starts

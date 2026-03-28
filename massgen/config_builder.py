@@ -32,6 +32,29 @@ from massgen.backend.capabilities import (
 from massgen.utils.model_catalog import get_model_metadata_for_provider_sync
 from massgen.utils.model_matcher import get_all_models_for_provider
 
+# Shared Docker backend defaults — single source of truth.
+# Imported by frontend/web/server.py and used by _generate_quickstart_config().
+DOCKER_BACKEND_DEFAULTS: dict[str, Any] = {
+    "enable_code_based_tools": True,
+    "exclude_file_operation_mcps": True,
+    "enable_mcp_command_line": True,
+    "command_line_execution_mode": "docker",
+    "command_line_docker_image": "ghcr.io/massgen/mcp-runtime-sudo:latest",
+    "command_line_docker_network_mode": "bridge",
+    "command_line_docker_enable_sudo": True,
+    "command_line_docker_credentials": {
+        "env_file": ".env",
+        "env_vars_from_file": [
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "GOOGLE_API_KEY",
+            "GEMINI_API_KEY",
+        ],
+    },
+    "shared_tools_directory": "shared_tools",
+    "auto_discover_custom_tools": False,
+}
+
 
 def _get_provider_capabilities(provider_id: str) -> dict[str, bool]:
     """Get capability flags for a provider for quickstart UI.
@@ -5272,42 +5295,12 @@ class ConfigBuilder:
         ) -> dict:
             tools = tools or {}
             if use_docker:
-                # Full Docker mode with code-based tools, command execution, skills
+                # Full Docker mode with code-based tools, command execution
                 backend = {
                     "type": agent_type,
                     "model": model,
                     "cwd": "workspace",
-                    # Code-based tools (CodeAct paradigm)
-                    "enable_code_based_tools": True,
-                    "exclude_file_operation_mcps": True,
-                    "enable_mcp_command_line": True,
-                    # Docker execution
-                    "command_line_execution_mode": "docker",
-                    "command_line_docker_image": "ghcr.io/massgen/mcp-runtime-sudo:latest",
-                    "command_line_docker_network_mode": "bridge",
-                    "command_line_docker_enable_sudo": True,
-                    # Docker credentials for API keys
-                    "command_line_docker_credentials": {
-                        "env_file": ".env",
-                        "env_vars_from_file": [
-                            "OPENAI_API_KEY",
-                            "ANTHROPIC_API_KEY",
-                            "GOOGLE_API_KEY",
-                            "GEMINI_API_KEY",
-                        ],
-                    },
-                    # Shared tools directory
-                    "shared_tools_directory": "shared_tools",
-                    # Auto-discover custom tools
-                    "auto_discover_custom_tools": True,
-                    # Exclude heavy/problematic tools
-                    "exclude_custom_tools": [
-                        "_computer_use",
-                        "_claude_computer_use",
-                        "_gemini_computer_use",
-                        "_browser_automation",
-                    ],
-                    # Note: enable_multimodal_tools is set at orchestrator level
+                    **DOCKER_BACKEND_DEFAULTS,
                 }
             else:
                 # Local mode - file operations only, no command execution

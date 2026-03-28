@@ -30,6 +30,7 @@ try:
 except ImportError:
     FASTAPI_AVAILABLE = False
 
+from massgen.config_builder import DOCKER_BACKEND_DEFAULTS
 from massgen.filesystem_manager._constants import (
     SKIP_DIRS_FOR_LOGGING,
     get_language_for_extension,
@@ -5954,42 +5955,14 @@ def _apply_agent_overrides(config: dict, overrides: dict) -> None:
             agent.setdefault("backend", {})["type"] = backend
 
 
-_DOCKER_BACKEND_KEYS = {
-    "enable_code_based_tools": True,
-    "exclude_file_operation_mcps": True,
-    "enable_mcp_command_line": True,
-    "command_line_execution_mode": "docker",
-    "command_line_docker_image": "ghcr.io/massgen/mcp-runtime-sudo:latest",
-    "command_line_docker_network_mode": "bridge",
-    "command_line_docker_enable_sudo": True,
-    "command_line_docker_credentials": {
-        "env_file": ".env",
-        "env_vars_from_file": [
-            "OPENAI_API_KEY",
-            "ANTHROPIC_API_KEY",
-            "GOOGLE_API_KEY",
-            "GEMINI_API_KEY",
-        ],
-    },
-    "shared_tools_directory": "shared_tools",
-    "auto_discover_custom_tools": True,
-    "exclude_custom_tools": [
-        "_computer_use",
-        "_claude_computer_use",
-        "_gemini_computer_use",
-        "_browser_automation",
-    ],
-}
-
-
 def _apply_docker_override(config: dict, use_docker: bool) -> None:
     """Toggle docker execution mode via per-agent backend keys."""
     for agent in config.get("agents", []):
         backend = agent.setdefault("backend", {})
         if use_docker:
-            backend.update(_DOCKER_BACKEND_KEYS)
+            backend.update(DOCKER_BACKEND_DEFAULTS)
         else:
-            for key in _DOCKER_BACKEND_KEYS:
+            for key in DOCKER_BACKEND_DEFAULTS:
                 backend.pop(key, None)
             backend["exclude_file_operation_mcps"] = False
 
